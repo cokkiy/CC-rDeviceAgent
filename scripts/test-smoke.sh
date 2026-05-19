@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${PROFILE:-debug}"
-CONFIG_PATH="${CONFIG_PATH:-$ROOT_DIR/CC-rStationService.toml}"
+CONFIG_PATH="${CONFIG_PATH:-$ROOT_DIR/CC-rDeviceAgent.toml}"
 REQUIRE_CAPTURE="${REQUIRE_CAPTURE:-0}"
 
 if [[ "$PROFILE" == "release" ]]; then
@@ -14,9 +14,9 @@ else
   TARGET_DIR="$ROOT_DIR/target/debug"
 fi
 
-SERVICE_BIN="$TARGET_DIR/cc-rstationservice"
-AGENT_BIN="$TARGET_DIR/cc-rstationservice-agent"
-SMOKETEST_BIN="$TARGET_DIR/cc-rstationservice-smoketest"
+SERVICE_BIN="$TARGET_DIR/cc-rdeviceagent"
+AGENT_BIN="$TARGET_DIR/cc-rdeviceagent-agent"
+SMOKETEST_BIN="$TARGET_DIR/cc-rdeviceagent-smoketest"
 
 SERVICE_LOG="$(mktemp)"
 AGENT_LOG="$(mktemp)"

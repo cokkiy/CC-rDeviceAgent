@@ -4,15 +4,15 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --system cc && \
-    useradd --system --gid cc --home-dir /var/lib/cc-rstationservice --create-home cc
+    useradd --system --gid cc --home-dir /var/lib/cc-rdeviceagent --create-home cc
 
-WORKDIR /var/lib/cc-rstationservice
+WORKDIR /var/lib/cc-rdeviceagent
 
 COPY iot-sim-entrypoint.sh /usr/local/bin/iot-sim-entrypoint.sh
-COPY CC-rStationService.iot.toml.template /etc/cc-rstationservice/CC-rStationService.toml.template
-COPY cc-rstationservice /usr/local/bin/cc-rstationservice
+COPY CC-rDeviceAgent.iot.toml.template /etc/cc-rdeviceagent/CC-rDeviceAgent.toml.template
+COPY cc-rdeviceagent /usr/local/bin/cc-rdeviceagent
 
-RUN chmod 755 /usr/local/bin/iot-sim-entrypoint.sh /usr/local/bin/cc-rstationservice
+RUN chmod 755 /usr/local/bin/iot-sim-entrypoint.sh /usr/local/bin/cc-rdeviceagent
 
 USER cc
 

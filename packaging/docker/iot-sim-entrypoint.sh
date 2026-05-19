@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-TEMPLATE_PATH="/etc/cc-rstationservice/CC-rStationService.toml.template"
-CONFIG_PATH="${CC_CONFIG_PATH:-/var/lib/cc-rstationservice/CC-rStationService.toml}"
+TEMPLATE_PATH="/etc/cc-rdeviceagent/CC-rDeviceAgent.toml.template"
+CONFIG_PATH="${CC_CONFIG_PATH:-/var/lib/cc-rdeviceagent/CC-rDeviceAgent.toml}"
 STATION_ID="${CC_STATION_ID:-${HOSTNAME:-iot-device}}"
 BROKER_HOST="${CC_MQTT_BROKER_HOST:-mosquitto}"
 BROKER_PORT="${CC_MQTT_BROKER_PORT:-1883}"
@@ -23,5 +23,5 @@ sed \
     -e "s|__AUTH_TOKEN__|$(escape_sed "$AUTH_TOKEN")|g" \
     "$TEMPLATE_PATH" >"$CONFIG_PATH"
 
-exec /usr/local/bin/cc-rstationservice foreground --config "$CONFIG_PATH"
+exec /usr/local/bin/cc-rdeviceagent foreground --config "$CONFIG_PATH"
 

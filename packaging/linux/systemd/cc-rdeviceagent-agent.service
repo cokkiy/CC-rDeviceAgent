@@ -5,8 +5,8 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/.local/lib/cc-rstationservice
-ExecStart=%h/.local/lib/cc-rstationservice/cc-rstationservice-agent --config %h/.local/lib/cc-rstationservice/CC-rStationService.toml
+WorkingDirectory=%h/.local/lib/cc-rdeviceagent
+ExecStart=%h/.local/lib/cc-rdeviceagent/cc-rdeviceagent-agent --config %h/.local/lib/cc-rdeviceagent/CC-rDeviceAgent.toml
 Restart=always
 RestartSec=2
 

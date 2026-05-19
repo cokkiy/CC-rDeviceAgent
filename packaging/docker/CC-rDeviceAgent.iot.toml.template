@@ -1,5 +1,5 @@
 [service]
-service_name = "CC-rStationService"
+service_name = "CC-rDeviceAgent"
 station_id = "__STATION_ID__"
 state_interval_seconds = __STATE_INTERVAL_SECONDS__
 watched_processes = []

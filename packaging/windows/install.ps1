@@ -1,17 +1,17 @@
 param(
-  [string]$InstallRoot = "$env:ProgramFiles\CC-rStationService",
-  [string]$ConfigPath = "$env:ProgramFiles\CC-rStationService\CC-rStationService.toml",
+  [string]$InstallRoot = "$env:ProgramFiles\CC-rDeviceAgent",
+  [string]$ConfigPath = "$env:ProgramFiles\CC-rDeviceAgent\CC-rDeviceAgent.toml",
   [string]$AgentUser = $env:USERNAME
 )
 
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$ServiceBinary = Join-Path $Root "target\release\cc-rstationservice.exe"
-$AgentBinary = Join-Path $Root "target\release\cc-rstationservice-agent.exe"
-$ConfigSource = Join-Path $Root "CC-rStationService.toml"
-$ServiceName = "CC-rStationService"
-$AgentTaskName = "CC-rStationService-Agent"
+$ServiceBinary = Join-Path $Root "target\release\cc-rdeviceagent.exe"
+$AgentBinary = Join-Path $Root "target\release\cc-rdeviceagent-agent.exe"
+$ConfigSource = Join-Path $Root "CC-rDeviceAgent.toml"
+$ServiceName = "CC-rDeviceAgent"
+$AgentTaskName = "CC-rDeviceAgent-Agent"
 $AuthToken = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
 
 if (-not (Test-Path $ServiceBinary) -or -not (Test-Path $AgentBinary)) {
@@ -19,15 +19,15 @@ if (-not (Test-Path $ServiceBinary) -or -not (Test-Path $AgentBinary)) {
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
-Copy-Item $ServiceBinary (Join-Path $InstallRoot "cc-rstationservice.exe") -Force
-Copy-Item $AgentBinary (Join-Path $InstallRoot "cc-rstationservice-agent.exe") -Force
+Copy-Item $ServiceBinary (Join-Path $InstallRoot "cc-rdeviceagent.exe") -Force
+Copy-Item $AgentBinary (Join-Path $InstallRoot "cc-rdeviceagent-agent.exe") -Force
 
 Copy-Item $ConfigSource $ConfigPath -Force
 $ConfigContent = Get-Content $ConfigPath -Raw
 $ConfigContent = [System.Text.RegularExpressions.Regex]::Replace($ConfigContent, '^auth_token = .*$', "auth_token = `"$AuthToken`"", 'Multiline')
 Set-Content -Path $ConfigPath -Value $ConfigContent -NoNewline
 
-$ServiceExe = Join-Path $InstallRoot "cc-rstationservice.exe"
+$ServiceExe = Join-Path $InstallRoot "cc-rdeviceagent.exe"
 $ServiceCommand = "`"$ServiceExe`" --config `"$ConfigPath`" foreground"
 
 $serviceExists = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -39,7 +39,7 @@ if ($null -eq $serviceExists) {
 
 Start-Service -Name $ServiceName
 
-$AgentExe = Join-Path $InstallRoot "cc-rstationservice-agent.exe"
+$AgentExe = Join-Path $InstallRoot "cc-rdeviceagent-agent.exe"
 $AgentAction = New-ScheduledTaskAction -Execute $AgentExe -Argument "--config `"$ConfigPath`""
 $AgentTrigger = New-ScheduledTaskTrigger -AtLogOn -User $AgentUser
 $AgentPrincipal = New-ScheduledTaskPrincipal -UserId $AgentUser -LogonType Interactive -RunLevel Highest

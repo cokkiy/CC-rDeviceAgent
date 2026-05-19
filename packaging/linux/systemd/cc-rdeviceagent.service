@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/cc-rstationservice
-ExecStart=/opt/cc-rstationservice/cc-rstationservice foreground --config /opt/cc-rstationservice/CC-rStationService.toml
+WorkingDirectory=/opt/cc-rdeviceagent
+ExecStart=/opt/cc-rdeviceagent/cc-rdeviceagent foreground --config /opt/cc-rdeviceagent/CC-rDeviceAgent.toml
 Restart=always
 RestartSec=2
 User=root

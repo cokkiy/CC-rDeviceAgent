@@ -1,11 +1,11 @@
 param(
-  [string]$InstallRoot = "$env:ProgramFiles\CC-rStationService"
+  [string]$InstallRoot = "$env:ProgramFiles\CC-rDeviceAgent"
 )
 
 $ErrorActionPreference = "Stop"
 
-$ServiceName = "CC-rStationService"
-$AgentTaskName = "CC-rStationService-Agent"
+$ServiceName = "CC-rDeviceAgent"
+$AgentTaskName = "CC-rDeviceAgent-Agent"
 
 if (Get-ScheduledTask -TaskName $AgentTaskName -ErrorAction SilentlyContinue) {
   Unregister-ScheduledTask -TaskName $AgentTaskName -Confirm:$false
