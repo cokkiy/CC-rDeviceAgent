@@ -1,12 +1,12 @@
 [package]
-name = "cc-rstationservice"
+name = "cc-rdeviceagent"
 version = "0.1.0"
 edition = "2024"
 authors = ["OpenAI Codex"]
-default-run = "cc-rstationservice"
+default-run = "cc-rdeviceagent"
 
 [lib]
-name = "cc_rstationservice"
+name = "cc_rdeviceagent"
 
 [build-dependencies]
 protoc-bin-vendored = "3.2.0"

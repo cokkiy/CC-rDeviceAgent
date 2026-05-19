@@ -869,7 +869,7 @@ fn process_name_candidates(name: &str) -> Vec<String> {
 ///
 /// Two match strategies are used to handle Linux quirks:
 /// 1. **Prefix match on process name**: Linux truncates comm (and thus `name()`) to 15
-///    characters in `/proc/[pid]/stat`. So `cc-rstationservice` (18 chars) appears as
+///    characters in `/proc/[pid]/stat`. So `cc-rdeviceagent` (18 chars) appears as
 ///    `cc-rstationserv`. We match when the watched name *starts with* the process name.
 /// 2. **Cmdline substring match**: Script runners (node, python, sh) show up under the
 ///    interpreter name. We check whether any cmdline token *contains* the watched name,
@@ -884,7 +884,7 @@ fn process_matches_name(process: &sysinfo::Process, candidates: &[String]) -> bo
         }
 
         // Prefix match: kernel truncates comm to 15 chars on Linux.
-        // e.g. "cc-rstationserv" matches watched name "cc-rstationservice"
+        // e.g. "cc-rstationserv" matches watched name "cc-rdeviceagent"
         if candidate.starts_with(&proc_name) && proc_name.len() == 15 {
             return true;
         }
@@ -1073,8 +1073,8 @@ mod tests {
     fn make_state() -> AppState {
         AppState::new(
             AppConfig::default(),
-            PathBuf::from("/tmp/CC-rStationService.test.toml"),
-            PathBuf::from("/tmp/cc-rstationservice"),
+            PathBuf::from("/tmp/CC-rDeviceAgent.test.toml"),
+            PathBuf::from("/tmp/cc-rdeviceagent"),
         )
         .unwrap()
     }
@@ -1093,7 +1093,7 @@ mod tests {
 
         let runtime = sections.runtime.expect("runtime");
         assert!(runtime.total_memory >= 0);
-        assert!(runtime.service_path.contains("cc-rstationservice"));
+        assert!(runtime.service_path.contains("cc-rdeviceagent"));
         assert!(sections.network.is_some());
         assert!(sections.storage.is_some());
     }

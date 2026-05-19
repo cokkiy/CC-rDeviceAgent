@@ -57,7 +57,7 @@ pub async fn run(
         listen_addr = %listen_addr,
         watched_processes = state.watched_processes().len(),
         console_telemetry,
-        "starting CC-rStationService"
+        "starting CC-rDeviceAgent"
     );
 
     if console_telemetry {

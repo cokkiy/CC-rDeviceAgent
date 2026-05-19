@@ -1,4 +1,4 @@
-//! MQTT client module for CC-rStationService
+//! MQTT client module for CC-rDeviceAgent
 //!
 //! This module implements MQTT telemetry publishing for the station service.
 //! It publishes telemetry data to the CC-Aggregator via MQTT and

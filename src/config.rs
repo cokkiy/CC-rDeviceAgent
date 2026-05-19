@@ -54,7 +54,7 @@ pub struct MqttConfig {
 impl Default for ServiceConfig {
     fn default() -> Self {
         Self {
-            service_name: "CC-rStationService".to_string(),
+            service_name: "CC-rDeviceAgent".to_string(),
             station_id: String::new(),
             state_interval_seconds: 5,
             watched_processes: Vec::new(),
@@ -201,5 +201,5 @@ pub fn default_config_path() -> PathBuf {
         .ok()
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("CC-rStationService.toml")
+        .join("CC-rDeviceAgent.toml")
 }

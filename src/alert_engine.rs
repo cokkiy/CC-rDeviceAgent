@@ -1,4 +1,4 @@
-//! Alert Rule Engine for CC-rStationService
+//! Alert Rule Engine for CC-rDeviceAgent
 //!
 //! This module provides the alert rule model and core engine logic
 //! for evaluating telemetry data against user-defined rules.

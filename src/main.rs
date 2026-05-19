@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
-use cc_rstationservice::{app, platform};
+use cc_rdeviceagent::{app, platform};
 use tokio::runtime::Builder;
 use tokio::sync::watch;
 #[cfg(windows)]
@@ -118,7 +118,7 @@ impl Cli {
 }
 
 #[cfg(windows)]
-const WINDOWS_SERVICE_NAME: &str = "CC-rStationService";
+const WINDOWS_SERVICE_NAME: &str = "CC-rDeviceAgent";
 
 #[cfg(windows)]
 windows_service::define_windows_service!(ffi_service_main, windows_service_main);
