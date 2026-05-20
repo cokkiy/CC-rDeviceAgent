@@ -3,11 +3,11 @@
 //! This module provides persistent storage for command scripts using SQLite.
 
 use crate::scripts::{
-    CommandScript, ParameterType, ScriptExecutionResult, ScriptExport, ScriptFilter,
-    ScriptParameter, ScriptSortField, ScriptStats, ScriptType,
+    CommandScript, ScriptExecutionResult, ScriptExport, ScriptFilter, ScriptParameter,
+    ScriptSortField, ScriptStats, ScriptType,
 };
-use chrono::{DateTime, TimeZone, Utc};
-use rusqlite::{Connection, Result as SqliteResult, params};
+use chrono::{DateTime, Utc};
+use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -146,7 +146,7 @@ impl ScriptStore {
                 script.created_at.to_rfc3339(),
                 script.updated_at.to_rfc3339(),
                 script.version,
-                script.usage_count,
+                script.usage_count as i64,
                 selected_options_json,
             ],
         )?;
@@ -215,7 +215,7 @@ impl ScriptStore {
                 tags_json,
                 script.updated_at.to_rfc3339(),
                 new_version,
-                script.usage_count,
+                script.usage_count as i64,
                 selected_options_json,
             ],
         )?;
@@ -348,19 +348,27 @@ impl ScriptStore {
     pub fn stats(&self) -> ScriptStoreResult<ScriptStats> {
         let conn = self.conn.lock().unwrap();
 
-        let total_scripts: u64 =
-            conn.query_row("SELECT COUNT(*) FROM scripts", [], |row| row.get(0))?;
+        let total_scripts: u64 = conn.query_row("SELECT COUNT(*) FROM scripts", [], |row| {
+            let count: i64 = row.get(0)?;
+            Ok(count.max(0) as u64)
+        })?;
 
         let template_count: u64 = conn.query_row(
             "SELECT COUNT(*) FROM scripts WHERE is_template = 1",
             [],
-            |row| row.get(0),
+            |row| {
+                let count: i64 = row.get(0)?;
+                Ok(count.max(0) as u64)
+            },
         )?;
 
         let favorite_count: u64 = conn.query_row(
             "SELECT COUNT(*) FROM scripts WHERE is_favorite = 1",
             [],
-            |row| row.get(0),
+            |row| {
+                let count: i64 = row.get(0)?;
+                Ok(count.max(0) as u64)
+            },
         )?;
 
         let most_used_id: Option<String> = conn
@@ -373,7 +381,8 @@ impl ScriptStore {
 
         let total_executions: u64 =
             conn.query_row("SELECT COUNT(*) FROM script_executions", [], |row| {
-                row.get(0)
+                let count: i64 = row.get(0)?;
+                Ok(count.max(0) as u64)
             })?;
 
         Ok(ScriptStats {
@@ -512,7 +521,8 @@ fn row_to_script(row: &rusqlite::Row) -> rusqlite::Result<CommandScript> {
     let created_at_str: String = row.get(10)?;
     let updated_at_str: String = row.get(11)?;
     let version: u32 = row.get(12)?;
-    let usage_count: u64 = row.get(13)?;
+    let usage_count_raw: i64 = row.get(13)?;
+    let usage_count = usage_count_raw.max(0) as u64;
     let selected_options_json: String = row.get(14)?;
 
     let id = Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4());
