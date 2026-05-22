@@ -44,7 +44,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 regex = "1.11"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["fs", "process", "signal"] }
+nix = { version = "0.31", features = ["fs", "process", "signal", "feature"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
