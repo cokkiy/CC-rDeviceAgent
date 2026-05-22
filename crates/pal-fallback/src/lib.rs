@@ -253,15 +253,8 @@ impl CredentialStore for FileBackedKeyStore {
 }
 
 impl EntropySource for Unsupported {
-    fn fill(&self, bytes: &mut [u8]) -> PalResult<()> {
-        let seed = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|value| value.as_nanos())
-            .unwrap_or_default();
-        for (idx, byte) in bytes.iter_mut().enumerate() {
-            *byte = ((seed >> ((idx % 8) * 8)) & 0xff) as u8;
-        }
-        Ok(())
+    fn fill(&self, _bytes: &mut [u8]) -> PalResult<()> {
+        self.err("EntropySource", "fill")
     }
 }
 
