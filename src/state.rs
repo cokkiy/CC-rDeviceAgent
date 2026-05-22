@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
 use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState, get_sockets_info};
+#[cfg(feature = "packet-capture")]
 use pnet_datalink::interfaces;
 #[cfg(windows)]
 use sysinfo::Disks;
@@ -555,21 +556,7 @@ impl AppState {
 
     pub fn network_interfaces(&self) -> GetNetworkInterfacesResponse {
         GetNetworkInterfacesResponse {
-            items: interfaces()
-                .into_iter()
-                .map(|iface| NetworkInterfaceInfo {
-                    id: iface.name.clone(),
-                    name: iface.name.clone(),
-                    description: iface.name.clone(),
-                    is_up: iface.is_up(),
-                    dns_suffix: String::new(),
-                    dns_enabled: false,
-                    dynamic_dns: false,
-                    ip_addresses: iface.ips.iter().map(|ip| ip.ip().to_string()).collect(),
-                    multicast_addresses: Vec::new(),
-                    dhcp_servers: Vec::new(),
-                })
-                .collect(),
+            items: collect_network_interface_infos(),
         }
     }
 
@@ -705,6 +692,31 @@ pub fn terminate_process(pid: i32) -> Result<bool> {
     Ok(process.kill())
 }
 
+#[cfg(feature = "packet-capture")]
+fn collect_network_interface_infos() -> Vec<NetworkInterfaceInfo> {
+    interfaces()
+        .into_iter()
+        .map(|iface| NetworkInterfaceInfo {
+            id: iface.name.clone(),
+            name: iface.name.clone(),
+            description: iface.name.clone(),
+            is_up: iface.is_up(),
+            dns_suffix: String::new(),
+            dns_enabled: false,
+            dynamic_dns: false,
+            ip_addresses: iface.ips.iter().map(|ip| ip.ip().to_string()).collect(),
+            multicast_addresses: Vec::new(),
+            dhcp_servers: Vec::new(),
+        })
+        .collect()
+}
+
+#[cfg(not(feature = "packet-capture"))]
+fn collect_network_interface_infos() -> Vec<NetworkInterfaceInfo> {
+    Vec::new()
+}
+
+#[cfg(feature = "packet-capture")]
 fn collect_station_network_interfaces() -> Vec<StationNetworkInterface> {
     interfaces()
         .into_iter()
@@ -717,6 +729,11 @@ fn collect_station_network_interfaces() -> Vec<StationNetworkInterface> {
             ips: iface.ips.iter().map(|ip| ip.ip().to_string()).collect(),
         })
         .collect()
+}
+
+#[cfg(not(feature = "packet-capture"))]
+fn collect_station_network_interfaces() -> Vec<StationNetworkInterface> {
+    Vec::new()
 }
 
 fn collect_app_running_state(system: &System, station_id: &str, name: &str) -> AppRunningState {

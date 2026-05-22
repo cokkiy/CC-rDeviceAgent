@@ -35,9 +35,19 @@ jobs:
         run: cargo fmt --check
 
       - name: Check
+        if: runner.os != 'Windows'
+        run: cargo check --all-targets --features packet-capture
+
+      - name: Check (Windows)
+        if: runner.os == 'Windows'
         run: cargo check --all-targets
 
       - name: Test
+        if: runner.os != 'Windows'
+        run: cargo test --all-targets --features packet-capture
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
         run: cargo test --all-targets
 
       - name: Clippy
