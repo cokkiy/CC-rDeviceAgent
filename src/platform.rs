@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 pub fn reboot(force: bool) -> Result<()> {
     #[cfg(windows)]
