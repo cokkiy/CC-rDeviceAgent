@@ -252,7 +252,9 @@ logs/iot-sim/
 /CC-Client/LogViewerWeb/client-src/app/**/*.js.map
 /CC-Client/LogViewerWeb/log
 /CC-Client/LogViewerWeb/wwwroot
-.github
+.github/*
+!.github/workflows/
+!.github/workflows/ci.yml
 .vexp
 
 CMakeLists.txt.user

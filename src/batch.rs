@@ -12,8 +12,10 @@ use crate::scripts::{CommandScript, ScriptExecutionResult};
 /// Batch task status enumeration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BatchTaskStatus {
     /// Task is created but not started
+    #[default]
     Pending,
     /// Task is currently executing
     Running,
@@ -25,12 +27,6 @@ pub enum BatchTaskStatus {
     Failed,
     /// Task was cancelled
     Cancelled,
-}
-
-impl Default for BatchTaskStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for BatchTaskStatus {
@@ -50,8 +46,10 @@ impl std::fmt::Display for BatchTaskStatus {
 /// Defines which stations should be targeted by a batch task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TargetSelector {
     /// Select all stations
+    #[default]
     All,
     /// Select stations by exact ID match
     ByIds { ids: Vec<String> },
@@ -61,12 +59,6 @@ pub enum TargetSelector {
     ByTag { tag: String },
     /// Select stations by station group
     ByGroup { group: String },
-}
-
-impl Default for TargetSelector {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 impl TargetSelector {
@@ -83,15 +75,15 @@ impl TargetSelector {
             return TargetSelector::All;
         }
 
-        if s.starts_with('@') {
+        if let Some(tag) = s.strip_prefix('@') {
             return TargetSelector::ByTag {
-                tag: s[1..].to_string(),
+                tag: tag.to_string(),
             };
         }
 
-        if s.starts_with('#') {
+        if let Some(group) = s.strip_prefix('#') {
             return TargetSelector::ByGroup {
-                group: s[1..].to_string(),
+                group: group.to_string(),
             };
         }
 
@@ -134,8 +126,10 @@ impl TargetSelector {
 /// Execution policy for batch tasks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ExecutionPolicy {
     /// Execute on all targets simultaneously (parallel)
+    #[default]
     Parallel,
     /// Execute sequentially, one target at a time
     Sequential,
@@ -143,12 +137,6 @@ pub enum ExecutionPolicy {
     LimitedParallel { max_concurrency: u32 },
     /// Execute in batches with delay between batches
     BatchWithDelay { batch_size: u32, delay_ms: u64 },
-}
-
-impl Default for ExecutionPolicy {
-    fn default() -> Self {
-        Self::Parallel
-    }
 }
 
 impl ExecutionPolicy {
@@ -192,18 +180,14 @@ pub struct BatchExecutionItem {
 /// Status of a single execution item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BatchExecutionStatus {
+    #[default]
     Pending,
     Running,
     Success,
     Failed,
     Skipped,
-}
-
-impl Default for BatchExecutionStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 /// A batch task that coordinates execution of scripts across multiple stations.
@@ -404,18 +388,14 @@ fn default_limit() -> u64 {
 /// Fields that can be used for sorting batch tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BatchTaskSortField {
+    #[default]
     CreatedAt,
     UpdatedAt,
     Name,
     Status,
     Progress,
-}
-
-impl Default for BatchTaskSortField {
-    fn default() -> Self {
-        Self::CreatedAt
-    }
 }
 
 /// Statistics about batch task executions.

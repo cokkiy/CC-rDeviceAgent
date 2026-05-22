@@ -15,8 +15,6 @@ use crate::batch::{
     BatchExecutionItem, BatchExecutionStatus, BatchParameterValue, BatchTask, BatchTaskFilter,
     BatchTaskSortField, BatchTaskStats, BatchTaskStatus, ExecutionPolicy, TargetSelector,
 };
-use crate::scripts::CommandScript;
-
 /// In-memory cache for batch tasks
 pub struct BatchTaskCache {
     tasks: RwLock<HashMap<Uuid, BatchTask>>,
@@ -78,15 +76,15 @@ impl BatchTaskCache {
         let mut filtered: Vec<BatchTask> = tasks
             .into_iter()
             .filter(|task| {
-                if let Some(status) = &filter.status {
-                    if task.status != *status {
-                        return false;
-                    }
+                if let Some(status) = &filter.status
+                    && task.status != *status
+                {
+                    return false;
                 }
-                if let Some(created_by) = &filter.created_by {
-                    if task.created_by.as_deref() != Some(created_by.as_str()) {
-                        return false;
-                    }
+                if let Some(created_by) = &filter.created_by
+                    && task.created_by.as_deref() != Some(created_by.as_str())
+                {
+                    return false;
                 }
                 true
             })
@@ -427,8 +425,7 @@ impl BatchTaskStore {
             let result_json = item
                 .result
                 .as_ref()
-                .map(|r| serde_json::to_string(r).ok())
-                .flatten();
+                .and_then(|r| serde_json::to_string(r).ok());
             let status_json = serde_json::to_string(&item.status)?;
 
             conn.execute(
@@ -507,8 +504,7 @@ impl BatchTaskStore {
                 let result_json = item
                     .result
                     .as_ref()
-                    .map(|r| serde_json::to_string(r).ok())
-                    .flatten();
+                    .and_then(|r| serde_json::to_string(r).ok());
                 let status_json = serde_json::to_string(&item.status)?;
 
                 conn.execute(
@@ -590,6 +586,7 @@ struct ExecutionItemData {
 mod tests {
     use super::*;
     use crate::batch::BatchExecutionStatus;
+    use crate::scripts::CommandScript;
     use std::env::temp_dir;
 
     #[test]

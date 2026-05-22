@@ -148,8 +148,8 @@ mod platform {
 
             let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
             let table_status = GetIfTable2(&mut table);
-            if table_status != NO_ERROR.0 {
-                return Err(anyhow!("GetIfTable2 failed with {}", table_status));
+            if table_status != NO_ERROR {
+                return Err(anyhow!("GetIfTable2 failed with {:?}", table_status));
             }
 
             let interface_counters = if table.is_null() {

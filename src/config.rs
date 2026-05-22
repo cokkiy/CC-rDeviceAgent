@@ -145,6 +145,14 @@ impl AppConfig {
     }
 }
 
+pub fn default_config_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("CC-rDeviceAgent.toml")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,12 +202,4 @@ mod tests {
 
         assert!(config.validate().is_err());
     }
-}
-
-pub fn default_config_path() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("CC-rDeviceAgent.toml")
 }

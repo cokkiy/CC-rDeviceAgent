@@ -170,7 +170,7 @@ impl ScriptStore {
             "#,
         )?;
 
-        let script = stmt.query_row(params![id.to_string()], |row| Ok(row_to_script(row)?))?;
+        let script = stmt.query_row(params![id.to_string()], row_to_script)?;
 
         Ok(script)
     }
@@ -300,7 +300,7 @@ impl ScriptStore {
         let mut stmt = conn.prepare(&sql)?;
 
         let scripts: Vec<CommandScript> = stmt
-            .query_map([], |row| Ok(row_to_script(row)?))?
+            .query_map([], row_to_script)?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -442,7 +442,7 @@ impl ScriptStore {
 
         let results = stmt
             .query_map(params![script_id.to_string(), limit as i64], |row| {
-                Ok(row_to_execution_result(row)?)
+                row_to_execution_result(row)
             })?
             .filter_map(|r| r.ok())
             .collect();
@@ -526,7 +526,7 @@ fn row_to_script(row: &rusqlite::Row) -> rusqlite::Result<CommandScript> {
     let selected_options_json: String = row.get(14)?;
 
     let id = Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4());
-    let script_type = ScriptType::from_str(&script_type_str).unwrap_or_default();
+    let script_type = script_type_str.parse::<ScriptType>().unwrap_or_default();
     let parameters: Vec<ScriptParameter> =
         serde_json::from_str(&parameters_json).unwrap_or_default();
     let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();

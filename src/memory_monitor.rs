@@ -84,7 +84,7 @@ impl TelemetryPlugin for MemoryMonitorPlugin {
         self.validate_config(config)?;
 
         // Re-initialize system with memory refresh kind
-        let mut system = System::new_with_specifics(
+        let system = System::new_with_specifics(
             RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
         );
         *self.system.write().unwrap() = system;

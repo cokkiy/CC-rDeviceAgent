@@ -3,10 +3,7 @@
 //! This module handles script parsing, parameter placeholder resolution,
 //! and parameter substitution for command scripts.
 
-use crate::scripts::{
-    CommandScript, ParameterType, ScriptExecutionResult, ScriptParameter, ScriptType,
-};
-use chrono::Utc;
+use crate::scripts::{CommandScript, ParameterType, ScriptParameter, ScriptType};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -67,17 +64,12 @@ pub struct ResolvedParameter {
 
 /// Script engine for parsing and substituting parameters in scripts.
 #[derive(Debug, Clone, Default)]
-pub struct ScriptEngine {
-    /// Collected parameters from the script
-    detected_parameters: Vec<String>,
-}
+pub struct ScriptEngine;
 
 impl ScriptEngine {
     /// Create a new script engine instance
     pub fn new() -> Self {
-        Self {
-            detected_parameters: Vec::new(),
-        }
+        Self
     }
 
     /// Detect all parameter placeholders in a script's content
@@ -283,18 +275,14 @@ impl ScriptEngine {
             .iter()
             .filter_map(|p| {
                 // Only validate if there's a default value to validate
-                if let Some(ref default) = p.default_value {
-                    if let Err(e) = Self::validate_parameter(p, default) {
-                        return Some((p.name.clone(), e));
-                    }
+                if let Some(ref default) = p.default_value
+                    && let Err(e) = Self::validate_parameter(p, default)
+                {
+                    return Some((p.name.clone(), e));
                 }
                 None
             })
             .collect();
-
-        // Script is valid if all detected parameters are defined
-        // (having required params without defaults is fine - they just need values at runtime)
-        let is_valid = missing.is_empty();
 
         Ok(ScriptAnalysis {
             detected_parameters: detected,

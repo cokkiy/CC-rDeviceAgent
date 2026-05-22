@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb1-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxfixes-dev \
+            libxtst-dev
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Check
+        if: runner.os != 'Windows'
+        run: cargo check --all-targets --features packet-capture
+
+      - name: Check (Windows)
+        if: runner.os == 'Windows'
+        run: cargo check --all-targets
+
+      - name: Test
+        if: runner.os != 'Windows'
+        run: cargo test --all-targets --features packet-capture
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test --all-targets
+
+      - name: Clippy
+        if: runner.os == 'Linux'
+        run: cargo clippy --all-targets -- -D warnings

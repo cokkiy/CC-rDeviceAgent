@@ -447,7 +447,11 @@ impl TelemetryScheduler {
         let mut bundles = Vec::with_capacity(indices.len());
         for index in indices {
             let profile = &mut self.profiles[*index];
-            bundles.push(collected.filter_to_bundle(station_id, profiles_version, &profile.profile));
+            bundles.push(collected.filter_to_bundle(
+                station_id,
+                profiles_version,
+                &profile.profile,
+            ));
             profile.next_collection_ms = advance_due_time(
                 profile.next_collection_ms,
                 profile.profile.collection_interval_ms,
@@ -458,7 +462,10 @@ impl TelemetryScheduler {
     }
 
     pub fn next_deadline_ms(&self) -> Option<u64> {
-        self.profiles.iter().map(|profile| profile.next_collection_ms).min()
+        self.profiles
+            .iter()
+            .map(|profile| profile.next_collection_ms)
+            .min()
     }
 }
 

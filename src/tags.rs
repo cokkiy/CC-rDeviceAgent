@@ -123,16 +123,12 @@ fn default_limit() -> u64 {
 /// Fields that can be used for sorting tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TagSortField {
+    #[default]
     CreatedAt,
     UpdatedAt,
     Name,
-}
-
-impl Default for TagSortField {
-    fn default() -> Self {
-        Self::CreatedAt
-    }
 }
 
 /// Filter options for querying station tags.
@@ -159,16 +155,12 @@ pub struct StationTagFilter {
 /// Fields that can be used for sorting station tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum StationTagSortField {
+    #[default]
     AssignedAt,
     StationId,
     TagId,
-}
-
-impl Default for StationTagSortField {
-    fn default() -> Self {
-        Self::AssignedAt
-    }
 }
 
 /// Statistics about tags.

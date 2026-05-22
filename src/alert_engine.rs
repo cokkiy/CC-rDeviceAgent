@@ -65,8 +65,10 @@ impl ComparisonOp {
 /// Aggregation function for time-series data
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AggregationFunc {
     /// Latest value
+    #[default]
     Latest,
     /// Minimum value
     Min,
@@ -82,12 +84,6 @@ pub enum AggregationFunc {
     StdDev,
     /// Rate of change (delta per second)
     Rate,
-}
-
-impl Default for AggregationFunc {
-    fn default() -> Self {
-        AggregationFunc::Latest
-    }
 }
 
 /// Single condition in an alert rule
@@ -130,10 +126,10 @@ impl AlertCondition {
 
         let cache = REGEX_CACHE.get_or_init(|| std::sync::RwLock::new(HashMap::new()));
 
-        if let Ok(cache) = cache.read() {
-            if let Some(re) = cache.get(pattern) {
-                return Some(re.clone());
-            }
+        if let Ok(cache) = cache.read()
+            && let Some(re) = cache.get(pattern)
+        {
+            return Some(re.clone());
         }
 
         let regex_pattern = pattern.replace('*', ".*").replace('?', ".");
@@ -285,7 +281,7 @@ fn default_log_level() -> String {
 }
 
 /// Alert state tracking
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AlertState {
     /// Rule ID this state belongs to
     pub rule_id: String,
@@ -299,19 +295,6 @@ pub struct AlertState {
     pub fire_count: u64,
     /// Last evaluation timestamp
     pub last_evaluated_at: Option<DateTime<Utc>>,
-}
-
-impl Default for AlertState {
-    fn default() -> Self {
-        Self {
-            rule_id: String::new(),
-            is_firing: false,
-            firing_since: None,
-            last_fired_at: None,
-            fire_count: 0,
-            last_evaluated_at: None,
-        }
-    }
 }
 
 impl AlertState {
@@ -686,13 +669,13 @@ impl AlertEngine {
 
             // Check duration requirement
             let rule = self.rules.get(rule_id);
-            if let (Some(rule), Some(since)) = (rule, state.firing_since) {
-                if let Some(duration) = &rule.duration {
-                    let firing_duration = now.timestamp() - since.timestamp();
-                    if firing_duration < duration.for_seconds as i64 {
-                        // Duration not met yet
-                        return;
-                    }
+            if let (Some(rule), Some(since)) = (rule, state.firing_since)
+                && let Some(duration) = &rule.duration
+            {
+                let firing_duration = now.timestamp() - since.timestamp();
+                if firing_duration < duration.for_seconds as i64 {
+                    // Duration not met yet
+                    return;
                 }
             }
 

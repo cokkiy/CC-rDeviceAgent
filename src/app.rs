@@ -1,5 +1,5 @@
 use std::io::SeekFrom;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,7 +9,6 @@ use async_stream::try_stream;
 use futures_util::Stream;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-use tokio::process::Command as TokioCommand;
 use tokio::sync::watch;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
@@ -152,29 +151,29 @@ pub async fn run(
     }
 
     // Start MQTT command listener if MQTT is enabled
-    if state.mqtt_enabled() {
-        if let Some(mqtt_client) = state.mqtt_client() {
-            let mqtt_client = mqtt_client.clone();
-            let state_clone = Arc::clone(&state);
-            tokio::spawn(async move {
-                match mqtt_client.subscribe_commands().await {
-                    Ok(mut command_rx) => {
-                        info!("MQTT command listener started");
-                        while let Some(command) = command_rx.recv().await {
-                            // Handle the command and send ack
-                            let ack = state_clone.handle_mqtt_command(&command);
-                            if let Err(e) = mqtt_client.publish_command_ack(&ack).await {
-                                warn!("Failed to publish command ack: {:?}", e);
-                            }
+    if state.mqtt_enabled()
+        && let Some(mqtt_client) = state.mqtt_client()
+    {
+        let mqtt_client = mqtt_client.clone();
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            match mqtt_client.subscribe_commands().await {
+                Ok(mut command_rx) => {
+                    info!("MQTT command listener started");
+                    while let Some(command) = command_rx.recv().await {
+                        // Handle the command and send ack
+                        let ack = state_clone.handle_mqtt_command(&command);
+                        if let Err(e) = mqtt_client.publish_command_ack(&ack).await {
+                            warn!("Failed to publish command ack: {:?}", e);
                         }
-                        info!("MQTT command listener ended");
                     }
-                    Err(e) => {
-                        error!("Failed to subscribe to MQTT commands: {:?}", e);
-                    }
+                    info!("MQTT command listener ended");
                 }
-            });
-        }
+                Err(e) => {
+                    error!("Failed to subscribe to MQTT commands: {:?}", e);
+                }
+            }
+        });
     }
 
     Server::builder()
@@ -182,7 +181,7 @@ pub async fn run(
             state: Arc::clone(&state),
         }))
         .add_service(FileTransferServer::new(FileTransferService {
-            _state: Arc::clone(&state),
+            state: Arc::clone(&state),
         }))
         .serve_with_shutdown(listen_addr, async move {
             let _ = shutdown.changed().await;
@@ -441,8 +440,8 @@ impl StationControl for StationControlService {
         request: Request<RenameFileRequest>,
     ) -> Result<Response<RenameFileResponse>, Status> {
         let request = request.into_inner();
-        let old_path = PathBuf::from(&request.old_name);
-        let new_path = PathBuf::from(&request.new_name);
+        let old_path = resolve_managed_file_path(&self.state, &request.old_name)?;
+        let new_path = resolve_managed_file_path(&self.state, &request.new_name)?;
 
         if !old_path.exists() {
             return Ok(Response::new(RenameFileResponse { ok: false }));
@@ -503,28 +502,19 @@ impl StationControl for StationControlService {
         &self,
         request: Request<ExecuteCommandRequest>,
     ) -> Result<Response<ExecuteCommandResponse>, Status> {
-        let req = request.into_inner();
-        let timeout_secs = req.timeout_seconds.max(1).min(600) as u64;
-
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            TokioCommand::new("sh").args(["-c", &req.command]).output(),
-        )
-        .await
-        .map_err(|_| Status::deadline_exceeded("command timed out"))?
-        .map_err(|error| Status::internal(format!("failed to spawn command: {error}")))?;
-
+        let _req = request.into_inner();
         Ok(Response::new(ExecuteCommandResponse {
-            exit_code: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            exit_code: -1,
+            stdout: String::new(),
+            stderr: "raw shell command execution is disabled until command policy is available"
+                .to_string(),
         }))
     }
 }
 
 #[derive(Clone)]
 struct FileTransferService {
-    _state: Arc<AppState>,
+    state: Arc<AppState>,
 }
 
 #[tonic::async_trait]
@@ -544,7 +534,7 @@ impl FileTransfer for FileTransferService {
                 return Err(Status::invalid_argument("file_name is required"));
             }
 
-            let path = PathBuf::from(&chunk.file_name);
+            let path = resolve_managed_file_path(&self.state, &chunk.file_name)?;
             if current_path.as_ref() != Some(&path) || current_file.is_none() {
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)
@@ -556,6 +546,7 @@ impl FileTransfer for FileTransferService {
                 current_file = Some(
                     OpenOptions::new()
                         .create(true)
+                        .truncate(false)
                         .read(true)
                         .write(true)
                         .open(&path)
@@ -597,7 +588,7 @@ impl FileTransfer for FileTransferService {
         request: Request<DownloadRequest>,
     ) -> Result<Response<Self::DownloadStream>, Status> {
         let request = request.into_inner();
-        let path = PathBuf::from(&request.file_name);
+        let path = resolve_managed_file_path(&self.state, &request.file_name)?;
         let metadata = fs::metadata(&path)
             .await
             .with_context(|| format!("read metadata {}", path.display()))
@@ -666,16 +657,16 @@ async fn start_one_app(app: AppStartParameter) -> AppStartingResult {
         };
     }
 
-    if !app.allow_multi_instance {
-        if let Some(existing) = find_process_ids_by_name(&process_name).into_iter().next() {
-            return AppStartingResult {
-                param_id: app.param_id,
-                process_id: existing,
-                process_name,
-                control_result: AppControlResult::AlreadyRunning as i32,
-                result: "process already running".to_string(),
-            };
-        }
+    if !app.allow_multi_instance
+        && let Some(existing) = find_process_ids_by_name(&process_name).into_iter().next()
+    {
+        return AppStartingResult {
+            param_id: app.param_id,
+            process_id: existing,
+            process_name,
+            control_result: AppControlResult::AlreadyRunning as i32,
+            result: "process already running".to_string(),
+        };
     }
 
     let mut command = tokio::process::Command::new(&app.app_path);
@@ -876,6 +867,44 @@ async fn remove_existing_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn resolve_managed_file_path(state: &AppState, input: &str) -> Result<PathBuf, Status> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(Status::invalid_argument("file path is required"));
+    }
+
+    let requested = Path::new(trimmed);
+    if requested.is_absolute() {
+        return Err(Status::permission_denied(
+            "absolute file paths are not allowed",
+        ));
+    }
+
+    if requested.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(Status::permission_denied(
+            "file path must stay within the managed directory",
+        ));
+    }
+
+    let root = managed_file_root(state)?;
+    Ok(root.join(requested))
+}
+
+fn managed_file_root(state: &AppState) -> Result<PathBuf, Status> {
+    let mut root = state
+        .service_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| Status::internal("service path has no parent directory"))?;
+    root.push("managed-files");
+    Ok(root)
+}
+
 async fn console_telemetry_task(state: Arc<AppState>) {
     let mut ticker = tokio::time::interval(Duration::from_secs(state.interval_seconds()));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -935,4 +964,38 @@ async fn console_telemetry_task(state: Arc<AppState>) {
 
 fn status_from_error(error: anyhow::Error) -> Status {
     Status::internal(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_state() -> AppState {
+        AppState::new(
+            AppConfig::default(),
+            PathBuf::from("/tmp/CC-rDeviceAgent.test.toml"),
+            PathBuf::from("/tmp/cc-rdeviceagent"),
+        )
+        .expect("state")
+    }
+
+    #[test]
+    fn managed_file_path_allows_relative_paths_under_service_directory() {
+        let state = make_state();
+        let path = resolve_managed_file_path(&state, "uploads/app.bin").expect("path");
+
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/managed-files").join("uploads/app.bin")
+        );
+    }
+
+    #[test]
+    fn managed_file_path_rejects_absolute_and_parent_paths() {
+        let state = make_state();
+
+        assert!(resolve_managed_file_path(&state, "/etc/passwd").is_err());
+        assert!(resolve_managed_file_path(&state, "../outside").is_err());
+        assert!(resolve_managed_file_path(&state, "nested/../../outside").is_err());
+    }
 }
