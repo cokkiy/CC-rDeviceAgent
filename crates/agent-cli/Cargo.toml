@@ -1,0 +1,9 @@
+[package]
+name = "agent-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+agent-core = { path = "../agent-core" }
+agent-telemetry = { path = "../agent-telemetry" }
