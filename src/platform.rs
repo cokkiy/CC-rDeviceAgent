@@ -4,20 +4,13 @@ use pal_core::PlatformBuilder;
 use pal_core::PlatformContext;
 use std::sync::OnceLock;
 
-static PLATFORM_CONTEXT: OnceLock<PlatformContext> = OnceLock::new();
+static PLATFORM_CONTEXT: OnceLock<Result<PlatformContext, String>> = OnceLock::new();
 
 pub fn context() -> Result<&'static PlatformContext> {
-    if let Some(context) = PLATFORM_CONTEXT.get() {
-        return Ok(context);
-    }
-
-    let context = build_context()?;
     PLATFORM_CONTEXT
-        .set(context)
-        .map_err(|_| anyhow!("platform context already initialized"))?;
-    PLATFORM_CONTEXT
-        .get()
-        .ok_or_else(|| anyhow!("platform context initialization failed"))
+        .get_or_init(|| build_context().map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 pub fn reboot(force: bool) -> Result<()> {
