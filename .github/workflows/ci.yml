@@ -43,24 +43,22 @@ jobs:
             libxtst-dev
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --all -- --check
 
-      - name: Check
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Check packet capture feature
         if: runner.os != 'Windows'
-        run: cargo check --all-targets --features packet-capture
+        run: cargo check --workspace --all-targets --features packet-capture
 
-      - name: Check (Windows)
-        if: runner.os == 'Windows'
-        run: cargo check --all-targets
+      - name: Test workspace
+        run: cargo test --workspace --all-targets
 
-      - name: Test
+      - name: Test packet capture feature
         if: runner.os != 'Windows'
-        run: cargo test --all-targets --features packet-capture
-
-      - name: Test (Windows)
-        if: runner.os == 'Windows'
-        run: cargo test --all-targets
+        run: cargo test --workspace --all-targets --features packet-capture
 
       - name: Clippy
         if: runner.os == 'Linux'
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
