@@ -86,10 +86,52 @@ pub struct ManagedPathResolver;
 
 impl PathResolver for ManagedPathResolver {
     fn resolve_managed_path(&self, root: &Path, requested: &Path) -> PalResult<PathBuf> {
+        let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let mut normalized = PathBuf::from(root);
         for component in requested.components() {
             match component {
-                Component::Normal(part) => normalized.push(part),
+                Component::Normal(part) => {
+                    normalized.push(part);
+
+                    match fs::symlink_metadata(&normalized) {
+                        Ok(metadata) => {
+                            if metadata.file_type().is_symlink() {
+                                return Err(PalError::new(
+                                    PalErrorKind::InvalidInput,
+                                    "resolve_managed_path",
+                                    "PathResolver",
+                                    "path must stay inside managed root",
+                                ));
+                            }
+
+                            let canonicalized = fs::canonicalize(&normalized).map_err(|_| {
+                                PalError::new(
+                                    PalErrorKind::InvalidInput,
+                                    "resolve_managed_path",
+                                    "PathResolver",
+                                    "path must stay inside managed root",
+                                )
+                            })?;
+                            if !canonicalized.starts_with(&canonical_root) {
+                                return Err(PalError::new(
+                                    PalErrorKind::InvalidInput,
+                                    "resolve_managed_path",
+                                    "PathResolver",
+                                    "path must stay inside managed root",
+                                ));
+                            }
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(_) => {
+                            return Err(PalError::new(
+                                PalErrorKind::InvalidInput,
+                                "resolve_managed_path",
+                                "PathResolver",
+                                "path must stay inside managed root",
+                            ));
+                        }
+                    }
+                }
                 Component::CurDir => {}
                 Component::RootDir | Component::Prefix(_) | Component::ParentDir => {
                     return Err(PalError::new(
