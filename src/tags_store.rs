@@ -86,15 +86,15 @@ impl TagCache {
         let mut filtered: Vec<Tag> = tags
             .into_iter()
             .filter(|tag| {
-                if let Some(name) = &filter.name {
-                    if !tag.name.to_lowercase().contains(&name.to_lowercase()) {
-                        return false;
-                    }
+                if let Some(name) = &filter.name
+                    && !tag.name.to_lowercase().contains(&name.to_lowercase())
+                {
+                    return false;
                 }
-                if let Some(created_by) = &filter.created_by {
-                    if tag.created_by.as_deref() != Some(created_by.as_str()) {
-                        return false;
-                    }
+                if let Some(created_by) = &filter.created_by
+                    && tag.created_by.as_deref() != Some(created_by.as_str())
+                {
+                    return false;
                 }
                 true
             })
@@ -184,16 +184,13 @@ impl StationTagCache {
         let mut station_tags = self.station_tags.write().unwrap();
         station_tags
             .entry(station_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(station_tag.clone());
         drop(station_tags);
 
         // Add to tag_stations
         let mut tag_stations = self.tag_stations.write().unwrap();
-        tag_stations
-            .entry(tag_id)
-            .or_insert_with(Vec::new)
-            .push(station_tag);
+        tag_stations.entry(tag_id).or_default().push(station_tag);
     }
 
     pub fn remove(&self, station_id: &str, tag_id: &Uuid) -> Option<StationTag> {
@@ -239,15 +236,15 @@ impl StationTagCache {
         let mut filtered: Vec<StationTag> = all_tags
             .into_iter()
             .filter(|st| {
-                if let Some(station_id) = &filter.station_id {
-                    if &st.station_id != station_id {
-                        return false;
-                    }
+                if let Some(station_id) = &filter.station_id
+                    && &st.station_id != station_id
+                {
+                    return false;
                 }
-                if let Some(tag_id) = &filter.tag_id {
-                    if st.tag_id != *tag_id {
-                        return false;
-                    }
+                if let Some(tag_id) = &filter.tag_id
+                    && st.tag_id != *tag_id
+                {
+                    return false;
                 }
                 true
             })

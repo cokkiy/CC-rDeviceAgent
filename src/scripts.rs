@@ -5,13 +5,16 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use uuid::Uuid;
 
 /// Script type enumeration representing supported scripting languages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ScriptType {
     /// Shell script (bash, sh)
+    #[default]
     Shell,
     /// PowerShell script
     Powershell,
@@ -19,12 +22,6 @@ pub enum ScriptType {
     Python,
     /// Lua script
     Lua,
-}
-
-impl Default for ScriptType {
-    fn default() -> Self {
-        Self::Shell
-    }
 }
 
 impl std::fmt::Display for ScriptType {
@@ -38,18 +35,21 @@ impl std::fmt::Display for ScriptType {
     }
 }
 
-impl ScriptType {
-    /// Parse from string, case-insensitive
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for ScriptType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "shell" | "sh" | "bash" => Some(ScriptType::Shell),
-            "powershell" | "ps" | "ps1" | "pwsh" => Some(ScriptType::Powershell),
-            "python" | "py" | "python3" => Some(ScriptType::Python),
-            "lua" => Some(ScriptType::Lua),
-            _ => None,
+            "shell" | "sh" | "bash" => Ok(ScriptType::Shell),
+            "powershell" | "ps" | "ps1" | "pwsh" => Ok(ScriptType::Powershell),
+            "python" | "py" | "python3" => Ok(ScriptType::Python),
+            "lua" => Ok(ScriptType::Lua),
+            _ => Err(()),
         }
     }
+}
 
+impl ScriptType {
     /// Get the file extension for this script type
     pub fn file_extension(&self) -> &'static str {
         match self {
@@ -74,17 +74,13 @@ impl ScriptType {
 /// Parameter type for script parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ParameterType {
+    #[default]
     String,
     Number,
     Boolean,
     Select,
-}
-
-impl Default for ParameterType {
-    fn default() -> Self {
-        Self::String
-    }
 }
 
 impl std::fmt::Display for ParameterType {
@@ -415,18 +411,14 @@ fn default_limit() -> u64 {
 /// Fields that can be used for sorting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ScriptSortField {
     Name,
     CreatedAt,
+    #[default]
     UpdatedAt,
     UsageCount,
     Version,
-}
-
-impl Default for ScriptSortField {
-    fn default() -> Self {
-        Self::UpdatedAt
-    }
 }
 
 /// Statistics about script usage.
@@ -489,11 +481,11 @@ mod tests {
 
     #[test]
     fn test_script_type_from_str() {
-        assert_eq!(ScriptType::from_str("shell"), Some(ScriptType::Shell));
-        assert_eq!(ScriptType::from_str("SHELL"), Some(ScriptType::Shell));
-        assert_eq!(ScriptType::from_str("bash"), Some(ScriptType::Shell));
-        assert_eq!(ScriptType::from_str("pwsh"), Some(ScriptType::Powershell));
-        assert_eq!(ScriptType::from_str("unknown"), None);
+        assert_eq!("shell".parse::<ScriptType>(), Ok(ScriptType::Shell));
+        assert_eq!("SHELL".parse::<ScriptType>(), Ok(ScriptType::Shell));
+        assert_eq!("bash".parse::<ScriptType>(), Ok(ScriptType::Shell));
+        assert_eq!("pwsh".parse::<ScriptType>(), Ok(ScriptType::Powershell));
+        assert!("unknown".parse::<ScriptType>().is_err());
     }
 
     #[test]

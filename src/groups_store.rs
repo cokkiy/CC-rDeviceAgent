@@ -83,15 +83,15 @@ impl StationGroupCache {
         let mut filtered: Vec<StationGroup> = groups
             .into_iter()
             .filter(|group| {
-                if let Some(name) = &filter.name {
-                    if !group.name.to_lowercase().contains(&name.to_lowercase()) {
-                        return false;
-                    }
+                if let Some(name) = &filter.name
+                    && !group.name.to_lowercase().contains(&name.to_lowercase())
+                {
+                    return false;
                 }
-                if let Some(created_by) = &filter.created_by {
-                    if group.created_by.as_deref() != Some(created_by.as_str()) {
-                        return false;
-                    }
+                if let Some(created_by) = &filter.created_by
+                    && group.created_by.as_deref() != Some(created_by.as_str())
+                {
+                    return false;
                 }
                 true
             })

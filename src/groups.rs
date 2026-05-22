@@ -129,17 +129,13 @@ fn default_limit() -> u64 {
 /// Fields that can be used for sorting station groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum StationGroupSortField {
+    #[default]
     CreatedAt,
     UpdatedAt,
     Name,
     StationCount,
-}
-
-impl Default for StationGroupSortField {
-    fn default() -> Self {
-        Self::CreatedAt
-    }
 }
 
 /// Statistics about station groups.

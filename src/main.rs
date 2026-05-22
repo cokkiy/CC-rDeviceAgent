@@ -57,11 +57,17 @@ async fn wait_for_shutdown_signal() {
     {
         use tokio::signal::unix::{SignalKind, signal};
 
-        let mut terminate = signal(SignalKind::terminate())
-            .unwrap_or_else(|_| panic!("failed to register SIGTERM handler"));
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = terminate.recv() => {}
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to register SIGTERM handler");
+                let _ = tokio::signal::ctrl_c().await;
+            }
         }
     }
 

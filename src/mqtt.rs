@@ -120,14 +120,13 @@ impl MqttClient {
 
                                     // Look up handler for this topic
                                     let handlers_lock = handlers.lock().await;
-                                    if let Some(tx) = handlers_lock.get(&topic) {
-                                        if let Ok(cmd) = serde_json::from_slice::<Command>(&publish.payload) {
+                                    if let Some(tx) = handlers_lock.get(&topic)
+                                        && let Ok(cmd) = serde_json::from_slice::<Command>(&publish.payload) {
                                             debug!("Received command for topic {}: {:?}", topic, cmd);
                                             if tx.send(cmd).await.is_err() {
                                                 warn!("Handler for topic {} dropped", topic);
                                             }
                                         }
-                                    }
                                 }
                             }
                             Err(e) => {

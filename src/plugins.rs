@@ -162,6 +162,7 @@ impl std::fmt::Display for PluginCategory {
 /// Status of a plugin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PluginStatus {
     /// Plugin is running and collecting data
     Running,
@@ -170,13 +171,8 @@ pub enum PluginStatus {
     /// Plugin has encountered an error
     Error,
     /// Plugin is stopped/unavailable
+    #[default]
     Stopped,
-}
-
-impl Default for PluginStatus {
-    fn default() -> Self {
-        Self::Stopped
-    }
 }
 
 impl std::fmt::Display for PluginStatus {

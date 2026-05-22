@@ -98,7 +98,7 @@ impl ProcessMonitorPlugin {
             })
             .collect();
 
-        processes.sort_by(|a, b| b.2.cmp(&a.2));
+        processes.sort_by_key(|process| std::cmp::Reverse(process.2));
         processes.into_iter().take(max_count).collect()
     }
 }
@@ -196,9 +196,9 @@ impl TelemetryPlugin for ProcessMonitorPlugin {
         for (idx, (name, pid, cpu_usage)) in top_cpu_processes.iter().enumerate() {
             let data_point = TelemetryDataPoint::new("process_cpu_percent", *cpu_usage, "percent")
                 .with_label("type", "top_cpu")
-                .with_label("rank", &format!("{}", idx + 1))
+                .with_label("rank", format!("{}", idx + 1))
                 .with_label("name", name)
-                .with_label("pid", &format!("{}", pid));
+                .with_label("pid", format!("{}", pid));
             telemetry.add_data_point(data_point);
         }
 
@@ -208,9 +208,9 @@ impl TelemetryPlugin for ProcessMonitorPlugin {
             let data_point =
                 TelemetryDataPoint::new("process_memory_bytes", *memory as f64, "bytes")
                     .with_label("type", "top_memory")
-                    .with_label("rank", &format!("{}", idx + 1))
+                    .with_label("rank", format!("{}", idx + 1))
                     .with_label("name", name)
-                    .with_label("pid", &format!("{}", pid));
+                    .with_label("pid", format!("{}", pid));
             telemetry.add_data_point(data_point);
         }
 
@@ -313,8 +313,7 @@ mod tests {
     fn test_get_process_counts() {
         let system = System::new_all();
         let (total, running, zombie) = ProcessMonitorPlugin::get_process_counts(&system);
-        assert!(total >= 0);
-        assert!(running >= 0);
-        assert!(zombie >= 0);
+        assert!(total >= running);
+        assert!(total >= zombie);
     }
 }

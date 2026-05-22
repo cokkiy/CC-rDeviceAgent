@@ -193,7 +193,7 @@ fn capture_png(display_index: u32) -> Result<Vec<u8>> {
     let mut png = Vec::new();
     let encoder = PngEncoder::new(Cursor::new(&mut png));
     encoder
-        .write_image(&raw, width, height, ColorType::Rgba8.into())
+        .write_image(&raw, width, height, ColorType::Rgba8)
         .context("encode screenshot to PNG")?;
 
     Ok(png)
