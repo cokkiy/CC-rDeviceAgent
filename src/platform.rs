@@ -31,9 +31,28 @@ pub fn shutdown() -> Result<()> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "solaris",
+    target_os = "illumos"
+))]
 pub fn daemonize() -> Result<()> {
     nix::unistd::daemon(true, false).map_err(|err| anyhow!("daemonize failed: {err}"))
+}
+
+#[cfg(target_os = "macos")]
+pub fn daemonize() -> Result<()> {
+    let result = unsafe { libc::daemon(1, 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error()).context("daemonize failed")
+    }
 }
 
 #[cfg(not(unix))]

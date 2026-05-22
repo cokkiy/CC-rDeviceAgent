@@ -231,6 +231,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "hostname",
+ "libc",
  "netstat2",
  "nix 0.31.2",
  "pnet_datalink",
