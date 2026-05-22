@@ -1528,7 +1528,6 @@ dependencies = [
  "nix 0.31.2",
  "pal-core",
  "pal-fallback",
- "tokio",
  "tracing",
 ]
 
