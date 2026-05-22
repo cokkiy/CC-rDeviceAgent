@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
+use agent_telemetry::TelemetryConfig;
 use anyhow::{Result, anyhow};
 use cc_rdeviceagent::{app, platform};
 use tokio::runtime::Builder;
 use tokio::sync::watch;
 #[cfg(windows)]
 use tracing::{debug, error};
-use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
-    init_tracing();
+    agent_telemetry::init_tracing(&TelemetryConfig::default());
     let cli = Cli::parse()?;
 
     #[cfg(windows)]
@@ -25,12 +25,6 @@ fn main() -> Result<()> {
     }
 
     run_foreground(cli.config_path, cli.console_telemetry)
-}
-
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .try_init();
 }
 
 fn run_foreground(config_path: Option<PathBuf>, console_telemetry: bool) -> Result<()> {
