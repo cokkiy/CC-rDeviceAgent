@@ -9,6 +9,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-cli"
+version = "0.1.0"
+dependencies = [
+ "agent-core",
+ "agent-telemetry",
+]
+
+[[package]]
+name = "agent-core"
+version = "0.1.0"
+dependencies = [
+ "pal-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "agent-protocols"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
+name = "agent-store"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pal-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "agent-telemetry"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -226,6 +271,9 @@ dependencies = [
 name = "cc-rdeviceagent"
 version = "0.1.0"
 dependencies = [
+ "agent-core",
+ "agent-store",
+ "agent-telemetry",
  "anyhow",
  "async-stream",
  "chrono",
@@ -234,6 +282,10 @@ dependencies = [
  "libc",
  "netstat2",
  "nix 0.31.2",
+ "pal-core",
+ "pal-fallback",
+ "pal-linux",
+ "pal-windows",
  "pnet_datalink",
  "prost",
  "protoc-bin-vendored",
@@ -1450,6 +1502,59 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "pal-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pal-fallback"
+version = "0.1.0"
+dependencies = [
+ "pal-core",
+ "tracing",
+]
+
+[[package]]
+name = "pal-linux"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "nix 0.31.2",
+ "pal-core",
+ "pal-fallback",
+ "tracing",
+]
+
+[[package]]
+name = "pal-macos"
+version = "0.1.0"
+dependencies = [
+ "pal-core",
+ "pal-fallback",
+]
+
+[[package]]
+name = "pal-mock"
+version = "0.1.0"
+dependencies = [
+ "pal-core",
+ "pal-fallback",
+]
+
+[[package]]
+name = "pal-windows"
+version = "0.1.0"
+dependencies = [
+ "pal-core",
+ "pal-fallback",
+ "windows 0.62.2",
+]
 
 [[package]]
 name = "paste"

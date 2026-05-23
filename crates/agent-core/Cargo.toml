@@ -1,0 +1,9 @@
+[package]
+name = "agent-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+pal-core = { path = "../pal-core" }
+thiserror.workspace = true

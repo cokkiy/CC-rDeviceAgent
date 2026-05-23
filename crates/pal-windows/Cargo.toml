@@ -1,0 +1,12 @@
+[package]
+name = "pal-windows"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+pal-core = { path = "../pal-core" }
+pal-fallback = { path = "../pal-fallback" }
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true

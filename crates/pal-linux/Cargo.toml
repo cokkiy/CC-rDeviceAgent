@@ -1,0 +1,14 @@
+[package]
+name = "pal-linux"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+pal-core = { path = "../pal-core" }
+pal-fallback = { path = "../pal-fallback" }
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+nix.workspace = true

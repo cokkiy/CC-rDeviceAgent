@@ -1,0 +1,9 @@
+[package]
+name = "pal-fallback"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+pal-core = { path = "../pal-core" }
+tracing.workspace = true

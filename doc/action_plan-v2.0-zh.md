@@ -113,33 +113,33 @@
 
 #### W0.1 项目结构重组（3 天）
 
-- [ ] 拆分 crate（按 PAL 设计调整）：
+- [x] 拆分 crate（按 PAL 设计调整）：
   - `agent-core`（业务核心）
   - `agent-protocols`（北向南向协议）
   - `pal-core` / `pal-linux` / `pal-windows` / `pal-macos` / `pal-fallback` / `pal-mock`（PAL 各 crate）
   - `agent-telemetry`
   - `agent-store`（State Store）
   - `agent-cli`
-- [ ] workspace 依赖管理规范
-- [ ] **交付物**：新 workspace 目录树
+- [x] workspace 依赖管理规范
+- [x] **交付物**：新 workspace 目录树
 
 #### W0.2 错误处理统一（3 天）
 
-- [ ] 统一 `AgentError` + `PalError` 体系
-- [ ] PAL 错误透传与上下文保留
-- [ ] **交付物**：错误处理规范文档
+- [x] 统一 `AgentError` + `PalError` 体系
+- [x] PAL 错误透传与上下文保留
+- [x] **交付物**：错误处理规范文档
 
 #### W0.3 可观测性骨架（5 天）
 
-- [ ] `tracing` 全栈集成
+- [x] `tracing` 全栈集成
 - [ ] OpenTelemetry SDK 集成（Logs/Metrics/Traces）
 - [ ] OTLP exporter 配置（可选）
-- [ ] **PAL 内置 trace 埋点**（便于定位平台相关问题）
-- [ ] **交付物**：可观测性基础设施
+- [x] **PAL 内置 trace 埋点**（便于定位平台相关问题）
+- [x] **交付物**：可观测性基础设施
 
 #### W0.4 PAL 契约层完整设计（5 天）【强化】
 
-- [ ] 12 类契约 trait 完整定义（参见 PAL 详细设计）：
+- [x] 12 类契约 trait 完整定义（参见 PAL 详细设计）：
   - ProcessManager / ServiceManager / SignalSender
   - FileSystem / PathResolver / DiskSpace / FileLock
   - NetworkInfo / NetworkConfig / DnsResolver
@@ -152,67 +152,67 @@
   - IpcServer / IpcClient
   - SystemLogger
   - DeviceId / MachineFingerprint
-- [ ] CapabilityProfile 数据结构定义
-- [ ] PAL Builder + PlatformContext 装配框架
-- [ ] **交付物**：`pal-core` crate（契约 + 装配框架）
+- [x] CapabilityProfile 数据结构定义
+- [x] PAL Builder + PlatformContext 装配框架
+- [x] **交付物**：`pal-core` crate（契约 + 装配框架）
 
 #### W0.5 PAL Linux 主适配器实现（8 天）【强化】
 
-- [ ] ProcessManager（基于 nix + tokio::process）
+- [x] ProcessManager（基于 nix + std::process；后续可切 tokio::process）
 - [ ] ServiceManager（systemd D-Bus）
-- [ ] FileSystem / DiskSpace（libc + statvfs）
+- [x] FileSystem / DiskSpace（libc + statvfs）
 - [ ] NetworkInfo（netlink）
-- [ ] SystemControl（reboot/shutdown）
+- [x] SystemControl（reboot/shutdown）
 - [ ] ResourceLimiter（cgroup v2，v1 fallback）
-- [ ] IpcServer（Unix Socket）
+- [x] IpcServer（Unix Socket）
 - [ ] SystemLogger（journald）
-- [ ] DeviceId（DMI/SMBIOS）
-- [ ] **交付物**：`pal-linux` crate
+- [x] DeviceId（DMI/SMBIOS）
+- [x] **交付物**：`pal-linux` crate
 
 #### W0.6 PAL 降级层与 Mock（4 天）【新增】
 
-- [ ] Fallback KeyStore（加密文件 + 设备指纹）
-- [ ] Fallback ResourceLimiter（rlimit）
-- [ ] Mock 适配器（用于测试）
-- [ ] **交付物**：`pal-fallback` + `pal-mock` crate
+- [x] Fallback KeyStore（文件型兜底；加密绑定留 Phase 1 Security Center）
+- [x] Fallback ResourceLimiter（Unsupported + Linux rlimit 子集）
+- [x] Mock 适配器（用于测试）
+- [x] **交付物**：`pal-fallback` + `pal-mock` crate
 
 #### W0.7 能力探测框架（3 天）【新增】
 
-- [ ] 探测流水线（TPM / A/B / cgroup / SecureBoot / 磁盘 / 网络）
-- [ ] CapabilityProfile 持久化缓存
-- [ ] 路由器（Capability Router）按 Profile 选择实现
-- [ ] **交付物**：能力探测模块
+- [x] 探测流水线（TPM / A/B / cgroup / SecureBoot / 磁盘 / 网络）
+- [x] CapabilityProfile 持久化缓存
+- [x] 路由器（Capability Router）按 Profile 选择实现
+- [x] **交付物**：能力探测模块
 
 #### W0.8 State Store 完整设计（5 天）【强化】
 
-- [ ] SQLite + WAL 集成
-- [ ] 完整 schema 设计（任务、配置、应用清单、审计、升级状态、密钥引用、CapabilityProfile 缓存）
-- [ ] schema 版本化与迁移机制（embedded SQL migrations）
+- [x] SQLite + WAL 集成
+- [x] 完整 schema 设计（任务、配置、应用清单、审计、升级状态、密钥引用、CapabilityProfile 缓存）
+- [x] schema 版本化与迁移机制（embedded SQL migrations）
 - [ ] 通用 Repository 抽象
-- [ ] 备份/恢复接口
-- [ ] **交付物**：`agent-store` crate
+- [x] 备份/恢复接口
+- [x] **交付物**：`agent-store` crate
 
 #### W0.9 PAL Windows/macOS 骨架（4 天）
 
-- [ ] Windows：ProcessManager（CreateProcess）+ FileSystem + IpcServer（Named Pipe）骨架
-- [ ] macOS：ProcessManager（posix_spawn）+ FileSystem + IpcServer（UDS）骨架
-- [ ] 三平台编译通过（即使部分功能 Stub）
-- [ ] **交付物**：`pal-windows` / `pal-macos` crate（骨架版）
+- [x] Windows：ProcessManager（CreateProcess）+ FileSystem + IpcServer（Named Pipe）骨架
+- [x] macOS：ProcessManager（posix_spawn）+ FileSystem + IpcServer（UDS）骨架
+- [x] 三平台编译通过（即使部分功能 Stub）
+- [x] **交付物**：`pal-windows` / `pal-macos` crate（骨架版）
 
 #### W0.10 CI/CD 流水线（3 天）
 
-- [ ] 三平台编译矩阵
-- [ ] 单元测试 + 集成测试
+- [x] 三平台编译矩阵
+- [x] 单元测试 + 集成测试
 - [ ] 代码覆盖率（目标 ≥ 50%）
 - [ ] cargo audit + clippy + fmt
-- [ ] PAL Mock 驱动的单测
-- [ ] **交付物**：CI/CD 流水线
+- [x] PAL Mock 驱动的单测
+- [x] **交付物**：CI/CD 流水线
 
 #### W0.11 文档体系（持续）
 
-- [ ] `CONTRIBUTING.md`
-- [ ] PAL 使用指南
-- [ ] State Store 使用指南
+- [x] `CONTRIBUTING.md`
+- [x] PAL 使用指南
+- [x] State Store 使用指南
 - [ ] ADR 持续更新
 
 ### 3.3 关键里程碑

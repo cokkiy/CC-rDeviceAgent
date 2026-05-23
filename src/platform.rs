@@ -1,34 +1,30 @@
-use std::process::Command;
-
 use anyhow::{Context, Result, anyhow};
+#[cfg(any(target_os = "linux", windows))]
+use pal_core::PlatformBuilder;
+use pal_core::PlatformContext;
+use std::sync::OnceLock;
+
+static PLATFORM_CONTEXT: OnceLock<Result<PlatformContext, String>> = OnceLock::new();
+
+pub fn context() -> Result<&'static PlatformContext> {
+    PLATFORM_CONTEXT
+        .get_or_init(|| build_context().map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(|e| anyhow::anyhow!("{}", e))
+}
 
 pub fn reboot(force: bool) -> Result<()> {
-    #[cfg(windows)]
-    {
-        let mut args = vec!["/r", "/t", "0"];
-        if force {
-            args.insert(1, "/f");
-        }
-        run_command("shutdown", &args)
-    }
-
-    #[cfg(unix)]
-    {
-        let _ = force;
-        run_command("shutdown", &["-r", "now"])
-    }
+    context()?
+        .system_control
+        .reboot(force)
+        .context("reboot through PAL")
 }
 
 pub fn shutdown() -> Result<()> {
-    #[cfg(windows)]
-    {
-        run_command("shutdown", &["/s", "/t", "0"])
-    }
-
-    #[cfg(unix)]
-    {
-        run_command("shutdown", &["now"])
-    }
+    context()?
+        .system_control
+        .shutdown()
+        .context("shutdown through PAL")
 }
 
 #[cfg(any(
@@ -60,15 +56,26 @@ pub fn daemonize() -> Result<()> {
     Ok(())
 }
 
-fn run_command(command: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(command)
-        .args(args)
-        .status()
-        .with_context(|| format!("spawn {command}"))?;
+#[cfg(target_os = "linux")]
+fn build_context() -> Result<PlatformContext> {
+    pal_linux::LinuxPlatformBuilder
+        .build()
+        .context("build linux PAL context")
+}
 
-    if status.success() {
-        return Ok(());
-    }
+#[cfg(windows)]
+fn build_context() -> Result<PlatformContext> {
+    pal_windows::WindowsPlatformBuilder
+        .build()
+        .context("build windows PAL context")
+}
 
-    Err(anyhow!("{command} exited with {status}"))
+#[cfg(all(unix, not(target_os = "linux")))]
+fn build_context() -> Result<PlatformContext> {
+    let mut profile = pal_core::CapabilityProfile::current_platform();
+    profile.has_unix_socket = true;
+    Ok(pal_fallback::fallback_context(
+        profile,
+        std::path::PathBuf::from(".cc-rdeviceagent-keys"),
+    ))
 }
