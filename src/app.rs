@@ -1,5 +1,5 @@
 use std::io::SeekFrom;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,7 +12,7 @@ use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::watch;
 use tonic::metadata::MetadataValue;
-use tonic::transport::Server;
+use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
@@ -42,11 +42,7 @@ pub async fn run(
     console_telemetry: bool,
 ) -> Result<()> {
     let (config, resolved_config_path) = AppConfig::load_with_path(config_path.as_deref())?;
-    if config.control.tls.enabled {
-        anyhow::bail!(
-            "control.tls.enabled is configured but gRPC mTLS server wiring is not complete; refusing plaintext startup"
-        );
-    }
+    let control_tls = config.control.tls.clone();
     let service_path = std::env::current_exe().context("resolve current executable")?;
     let state = Arc::new(AppState::new(config, resolved_config_path, service_path)?);
     let listen_addr = state.listen_addr()?;
@@ -182,7 +178,14 @@ pub async fn run(
         });
     }
 
-    Server::builder()
+    let mut server = Server::builder();
+    if control_tls.enabled {
+        server = server
+            .tls_config(build_grpc_tls_config(&control_tls)?)
+            .context("configure gRPC mTLS")?;
+    }
+
+    server
         .add_service(StationControlServer::new(StationControlService {
             state: Arc::clone(&state),
         }))
@@ -194,6 +197,22 @@ pub async fn run(
         })
         .await
         .context("run gRPC server")
+}
+
+fn build_grpc_tls_config(tls: &crate::config::TlsConfig) -> Result<ServerTlsConfig> {
+    let cert = read_required_file(tls.cert_path.as_deref(), "control.tls.cert_path")?;
+    let key = read_required_file(tls.key_path.as_deref(), "control.tls.key_path")?;
+    let ca = read_required_file(tls.ca_cert_path.as_deref(), "control.tls.ca_cert_path")?;
+    let config = ServerTlsConfig::new()
+        .identity(Identity::from_pem(cert, key))
+        .client_ca_root(Certificate::from_pem(ca))
+        .client_auth_optional(!tls.require_client_auth);
+    Ok(config)
+}
+
+fn read_required_file(path: Option<&Path>, field: &str) -> Result<Vec<u8>> {
+    let path = path.ok_or_else(|| anyhow::anyhow!("{field} is required"))?;
+    std::fs::read(path).with_context(|| format!("read {field} from {}", path.display()))
 }
 
 #[derive(Clone)]
@@ -541,6 +560,12 @@ impl FileTransfer for FileTransferService {
             }
 
             let path = resolve_managed_file_path(&self.state, &chunk.file_name)?;
+            ensure_upload_limits(
+                &self.state,
+                &path,
+                chunk.position as u64,
+                chunk.data.len() as u64,
+            )?;
             if current_path.as_ref() != Some(&path) || current_file.is_none() {
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)
@@ -605,6 +630,11 @@ impl FileTransfer for FileTransferService {
             .with_context(|| format!("read metadata {}", path.display()))
             .map_err(status_from_error)?;
         let total_length = metadata.len();
+        if total_length > self.state.max_file_transfer_bytes() {
+            return Err(Status::resource_exhausted(
+                "file exceeds transfer size limit",
+            ));
+        }
         let start_position = request.start_position.max(0) as u64;
 
         let output = try_stream! {
@@ -915,26 +945,15 @@ fn resolve_managed_file_path(state: &AppState, input: &str) -> Result<PathBuf, S
         return Err(Status::invalid_argument("file path is required"));
     }
 
-    let requested = Path::new(trimmed);
-    if requested.is_absolute() {
-        return Err(Status::permission_denied(
-            "absolute file paths are not allowed",
-        ));
-    }
-
-    if requested.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err(Status::permission_denied(
-            "file path must stay within the managed directory",
-        ));
-    }
-
     let root = managed_file_root(state)?;
-    Ok(root.join(requested))
+    platform::context()
+        .and_then(|context| {
+            context
+                .path_resolver
+                .resolve_managed_path(&root, Path::new(trimmed))
+                .context("resolve managed file path through PAL")
+        })
+        .map_err(|error| Status::permission_denied(error.to_string()))
 }
 
 fn managed_file_root(state: &AppState) -> Result<PathBuf, Status> {
@@ -945,6 +964,37 @@ fn managed_file_root(state: &AppState) -> Result<PathBuf, Status> {
         .ok_or_else(|| Status::internal("service path has no parent directory"))?;
     root.push("managed-files");
     Ok(root)
+}
+
+fn ensure_upload_limits(
+    state: &AppState,
+    path: &Path,
+    position: u64,
+    chunk_len: u64,
+) -> Result<(), Status> {
+    let projected_size = position.saturating_add(chunk_len);
+    if projected_size > state.max_file_transfer_bytes() {
+        return Err(Status::resource_exhausted("upload exceeds file size limit"));
+    }
+
+    let disk_info = platform::context()
+        .and_then(|context| {
+            context
+                .disk_space
+                .query(path)
+                .context("query disk space through PAL")
+        })
+        .map_err(|error| Status::internal(error.to_string()))?;
+    let required_free = state
+        .min_file_transfer_free_bytes()
+        .saturating_add(chunk_len);
+    if disk_info.available_bytes < required_free {
+        return Err(Status::resource_exhausted(
+            "insufficient free disk space for upload",
+        ));
+    }
+
+    Ok(())
 }
 
 async fn console_telemetry_task(state: Arc<AppState>) {
@@ -1039,6 +1089,21 @@ mod tests {
         assert!(resolve_managed_file_path(&state, "/etc/passwd").is_err());
         assert!(resolve_managed_file_path(&state, "../outside").is_err());
         assert!(resolve_managed_file_path(&state, "nested/../../outside").is_err());
+    }
+
+    #[test]
+    fn upload_limits_reject_oversized_chunks() {
+        let mut config = AppConfig::default();
+        config.service.file_transfer.max_file_bytes = 4;
+        let state = AppState::new(
+            config,
+            PathBuf::from("/tmp/CC-rDeviceAgent.test.toml"),
+            PathBuf::from("/tmp/cc-rdeviceagent"),
+        )
+        .expect("state");
+
+        let error = ensure_upload_limits(&state, Path::new("/tmp/upload.bin"), 2, 3).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::ResourceExhausted);
     }
 
     #[tokio::test]

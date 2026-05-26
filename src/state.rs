@@ -174,6 +174,14 @@ impl AppState {
         &self.config.service.launcher_proxy_path
     }
 
+    pub fn max_file_transfer_bytes(&self) -> u64 {
+        self.config.service.file_transfer.max_file_bytes
+    }
+
+    pub fn min_file_transfer_free_bytes(&self) -> u64 {
+        self.config.service.file_transfer.min_free_bytes
+    }
+
     pub fn agent_auth_token(&self) -> &str {
         &self.config.agent.auth_token
     }
@@ -667,6 +675,9 @@ fn command_policy_error_message(error: CommandPolicyError) -> String {
         }
         CommandPolicyError::InvalidParameterType(name) => {
             format!("invalid parameter type: {name}")
+        }
+        CommandPolicyError::InvalidParameterValue(name) => {
+            format!("invalid parameter value: {name}")
         }
     }
 }
