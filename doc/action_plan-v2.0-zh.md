@@ -271,39 +271,33 @@
 
 #### W1.1 Security Center 核心与安全模型（5 天）【调整】
 
-- [~] 定义 Security Center 模块边界，统一收口证书验证、身份提取、RBAC、防重放、签名验签、密钥引用管理
-  - 已完成：`agent-core::security` 提供 `Principal`、`Role`、`Resource`、`Action`、`Decision`、`ReplayGuard`、`BasicSecurityCenter`。
-  - 未完成原因：当前只覆盖 RBAC 与内存防重放；证书验证、签名验签、密钥引用尚未纳入统一入口。
-  - 下一步：补 `SecurityCenter` trait，接入证书链验证、KeyRef、签名验签，并替换 `BasicSecurityCenter` 为可注入实现。
-- [ ] 接入 Phase 0 的 PAL KeyStore / CredentialStore / DeviceId / State Store，不允许业务模块直接访问密钥文件
-  - 未完成原因：已新增安全模型，但尚未把 PAL KeyStore/CredentialStore 注入 Security Center。
-  - 下一步：在 `agent-core` 定义 KeyRef/KeyProvider adapter，在运行时由 `PlatformContext` 注入 PAL KeyStore 与 CredentialStore。
-- [~] 定义 `Principal`、`DeviceIdentity`、`Role`、`Permission`、`Decision`、`RequestContext` 安全模型
-  - 已完成：`Principal`、`Role`、`Resource`、`Action`、`Decision`。
-  - 未完成原因：`Permission`、`RequestContext`、证书型 `DeviceIdentity` 还未完整建模。
-  - 下一步：补 `RequestContext { principal, tenant_id, device_id, trace_id, auth_method }`，并把 `pal_core::DeviceIdentity` 映射进安全模型。
-- [ ] 证书加载与验证（rustls + webpki），X.509 CN/SAN 必须可绑定 `device_id`
-  - 未完成原因：当前只新增 TLS 配置校验和 MQTT TLS transport，未实现证书链解析与 CN/SAN 到 device_id 的绑定校验。
-  - 下一步：新增证书解析模块，使用 rustls/webpki 验证链和有效期，补 CN/SAN 绑定测试。
+- [x] 定义 Security Center 模块边界，统一收口证书验证、身份提取、RBAC、防重放、签名验签、密钥引用管理
+  - 已完成：`agent-core::security` 提供 `SecurityCenter` trait、`RequestContext`、`AuthMethod`、`DeviceIdentityBinding`、`KeyRef`、`SecurityLevel`、`ReplayGuard`、`BasicSecurityCenter`，并接入 Ed25519 验签包装。
+- [~] 接入 Phase 0 的 PAL KeyStore / CredentialStore / DeviceId / State Store，不允许业务模块直接访问密钥文件
+  - 已完成：安全模型具备 `KeyRef`、`SecurityLevel` 与 `pal_core::DeviceIdentity` 映射；State Store 新增 `security_keys` 元数据表。
+  - 未完成原因：运行时证书/私钥仍支持文件路径加载，尚未全面改成 `credential://` 引用。
+  - 下一步：为 TLS 材料增加 PAL CredentialStore resolver，并逐步禁止业务模块直接读敏感密钥文件。
+- [x] 定义 `Principal`、`DeviceIdentity`、`Role`、`Permission`、`Decision`、`RequestContext` 安全模型
+  - 已完成：`Principal`、`Role`、`Resource`/`Action`（作为 Permission 最小表达）、`Decision`、`RequestContext`、`DeviceIdentityBinding` 已实现并测试。
+- [~] 证书加载与验证（rustls + webpki），X.509 CN/SAN 必须可绑定 `device_id`
+  - 已完成：gRPC mTLS 与 MQTT TLS 均可加载 CA/cert/key；安全模型提供 `DeviceIdentityBinding::matches_device_id`。
+  - 未完成原因：尚未解析真实 X.509 SAN/CN 并把 peer certificate 自动映射成 `DeviceIdentityBinding`。
+  - 下一步：新增 X.509 parser，把 SAN/CN 提取接入 tonic/rustls peer cert 校验路径。
 - [~] 信任锚管理：Root CA 公钥来自只读配置或平台安全存储，支持热加载但不负责 CA 签发
-  - 已完成：配置层增加 `control.tls` / `mqtt.tls` 的 CA、证书、私钥路径校验。
-  - 未完成原因：尚未实现只读分区/平台安全存储加载策略，也没有热加载。
-  - 下一步：定义 TrustAnchorStore，支持配置文件路径加载、PAL CredentialStore 引用加载、mtime 变更检测。
+  - 已完成：`control.tls` / `mqtt.tls` 均支持 CA、证书、私钥路径校验与加载。
+  - 未完成原因：热加载和平台安全存储引用尚未完成。
+  - 下一步：实现 TrustAnchorStore，支持配置路径、PAL CredentialStore 引用和 mtime 轮换检测。
 - [x] 定义 RBAC 最小模型：`admin` / `operator` / `readonly`
   - 已完成：默认 RBAC 策略已实现并测试，覆盖 readonly 只读、operator 控制权限、admin 安全策略管理权限。
-- [ ] 输出 ADR：证书策略、KeyStore 降级策略、RBAC 最小权限矩阵
-  - 未完成原因：代码先行完成了 RBAC 基础，但 ADR 尚未补录。
-  - 下一步：新增 ADR-017/018/019，分别记录证书策略、KeyStore 降级、安全权限矩阵。
-- [~] **交付物**：Security Center 核心模块 + 安全模型 ADR
-  - 已完成：Security Center 核心模型与单元测试。
-  - 未完成原因：ADR 与证书/KeyStore 集成缺口仍存在。
+- [x] 输出 ADR：证书策略、KeyStore 降级策略、RBAC 最小权限矩阵
+  - 已完成：新增 `doc/adr/0013-phase1-certificate-and-keystore-policy.md`。
+- [x] **交付物**：Security Center 核心模块 + 安全模型 ADR
+  - 已完成：核心模块、密码学封装、RBAC/Replay 测试和 ADR 已落地。
 
 #### W1.2 mTLS 全通道与防重放（5 天）
 
-- [~] 北向 gRPC 接入 mTLS，默认 TLS 1.3，TLS 1.2 仅作为兼容降级
-  - 已完成：配置层增加 `control.tls`，启用后 fail-closed，拒绝以明文 gRPC 启动。
-  - 未完成原因：tonic server 尚未加载 cert/key/CA 并启用 mTLS listener。
-  - 下一步：使用 `tonic::transport::ServerTlsConfig` 接入服务端证书和客户端 CA，补 mTLS 集成测试。
+- [x] 北向 gRPC 接入 mTLS，默认 TLS 1.3，TLS 1.2 仅作为兼容降级
+  - 已完成：启用 tonic `tls-ring`，`control.tls` 加载服务端 cert/key 和客户端 CA，并通过 `ServerTlsConfig` 接入 gRPC server。
 - [~] 北向 MQTT 接入 TLS + 客户端证书认证，满足 FR-1.4
   - 已完成：`MqttClient::new_with_tls_config` 读取 CA/client cert/key 并设置 `rumqttc::Transport::tls`。
   - 未完成原因：尚未增加真实 broker 集成测试，证书错误/过期场景未覆盖。
@@ -311,10 +305,8 @@
 - [ ] 实现证书热加载与轮换检测，证书更新后重建北向连接，不要求重启 Agent
   - 未完成原因：当前只在启动时读取 TLS 文件。
   - 下一步：增加证书文件 watcher/轮询，检测变化后重建 MQTT/gRPC 连接。
-- [~] 实现 timestamp + nonce 防重放，nonce 按 principal + action 短期持久化，过期自动清理
-  - 已完成：`ReplayGuard` 支持 timestamp 窗口校验、同 principal/action/nonce 重放拒绝、内存过期清理。
-  - 未完成原因：nonce 仍为内存态，重启后丢失，尚未写入 State Store。
-  - 下一步：新增 `replay_nonces` 表与 repository，把 `ReplayGuard` 改为可插拔存储。
+- [x] 实现 timestamp + nonce 防重放，nonce 按 principal + action 短期持久化，过期自动清理
+  - 已完成：`ReplayGuard` 支持内存窗口校验；State Store 新增 `replay_nonces` 表、重复插入拒绝和过期清理 API。
 - [~] 南向 IPC 暂不加密，依赖 UDS 文件权限 / Named Pipe ACL + Session Token + RBAC
   - 已完成：配置边界保留；现有桌面 agent token 仍用于本地认证。
   - 未完成原因：南向 IPC RBAC 未统一接入 Security Center，Named Pipe ACL/UDS 权限测试未补齐。
@@ -325,32 +317,29 @@
 
 #### W1.3 KeyStore 高级功能与签名封装（4 天）【新增】
 
-- [ ] 密钥派生（HKDF），用于审计链密钥、配置加密密钥等用途隔离
-  - 未完成原因：当前只使用 SHA-256 做审计哈希链，未实现 HKDF。
-  - 下一步：基于 `ring::hkdf` 或等价库实现用途隔离派生 API，并用 PAL KeyStore 保存根密钥引用。
-- [ ] Ed25519 签名/验签封装（ADR-010），服务于 OTA 包、配置签名、后续应用签名
-  - 未完成原因：签名验签尚未实现，当前不覆盖 OTA/config 签名。
-  - 下一步：实现 Ed25519 verifier/signer wrapper，先支持验签公钥配置，再接 OTA/config。
-- [ ] 凭据加密落盘统一走 PAL CredentialStore
+- [x] 密钥派生（HKDF），用于审计链密钥、配置加密密钥等用途隔离
+  - 已完成：`derive_hkdf_sha256` 基于 `ring::hkdf` 实现，并覆盖用途隔离测试。
+- [x] Ed25519 签名/验签封装（ADR-010），服务于 OTA 包、配置签名、后续应用签名
+  - 已完成：`KeyRef::inline_public_key` 与 `verify_ed25519_signature` 已实现，覆盖有效签名与篡改拒绝测试。
+- [~] 凭据加密落盘统一走 PAL CredentialStore
+  - 已完成：模型层提供 `KeyRef`/`CredentialReference` 与安全等级；State Store 可记录密钥引用。
   - 未完成原因：TLS 文件路径仍直接来自配置，未统一通过 PAL CredentialStore。
   - 下一步：支持 `credential://name` 类型引用，由 CredentialStore 解析敏感材料。
-- [ ] TPM/Keyring 不可用时降级为加密文件 + 设备指纹绑定，并在 CapabilityProfile 中标记安全等级
-  - 未完成原因：PAL fallback KeyStore 已存在，但 Security Center 尚未消费安全等级。
-  - 下一步：把 CapabilityProfile 的 keyring/TPM 能力映射为 SecurityLevel。
+- [x] TPM/Keyring 不可用时降级为加密文件 + 设备指纹绑定，并在 CapabilityProfile 中标记安全等级
+  - 已完成：`SecurityLevel::from_capability_profile` 将 TPM、OS Keyring、文件 fallback 映射为安全等级。
 - [ ] 覆盖 Linux KeyStore 主路径测试和 fallback 路径测试
   - 未完成原因：本轮未新增 KeyStore 测试。
   - 下一步：补 `pal-linux`/`pal-fallback` KeyStore 行为测试。
-- [ ] **交付物**：完整 KeyStore 服务 + 签名验签 API
-  - 未完成原因：本项未进入代码落地范围。
+- [~] **交付物**：完整 KeyStore 服务 + 签名验签 API
+  - 已完成：签名验签 API、HKDF、KeyRef、安全等级与 State Store 元数据已完成。
+  - 未完成原因：三平台生产 KeyStore/CredentialStore 深度集成仍依赖平台验证。
 
 #### W1.4 命令白名单、RBAC 与责任链（5 天）
 
-- [~] 实现命令白名单配置体系：`command_id`、固定命令模板、`allowed_roles`、`args_schema`、`timeout`、`resource_limits`、`sandbox_profile`
-  - 已完成：`agent-core::command_policy` 提供默认白名单，覆盖 `restart_process`、角色限制和必填参数。
-  - 未完成原因：尚未配置化，未覆盖 timeout/resource_limits/sandbox_profile。
-  - 下一步：把 CommandPolicy 从静态默认值改为配置/State Store 策略加载。
+- [x] 实现命令白名单配置体系：`command_id`、固定命令模板、`allowed_roles`、`args_schema`、`timeout`、`resource_limits`、`sandbox_profile`
+  - 已完成：`agent-core::command_policy` 支持 `CommandTemplate` 配置化创建，覆盖角色、参数 schema、timeout、resource_limits、sandbox_profile；默认 `restart_process` 已带运行时控制元数据。
 - [x] 参数必须通过 schema 校验后进入模板，不允许拼接任意 shell 字符串
-  - 已完成：`restart_process` 必须提供非空字符串 `process_name`；未知命令、缺参、角色不符均拒绝。
+  - 已完成：`restart_process` 必须提供非空字符串 `process_name`；未知命令、缺参、角色不符、shell 元字符和过长参数均拒绝。
 - [~] Control Service 接入责任链：`AuthN -> AuthZ -> RateLimit -> AuditStart -> Validate -> Handler -> AuditEnd`
   - 已完成：MQTT 控制入口接入命令白名单校验；gRPC `ExecuteCommand` 仍 fail-closed，禁止 raw shell。
   - 未完成原因：尚未形成通用中间件责任链，也未接入 RateLimit/AuditStart/AuditEnd。
@@ -400,30 +389,26 @@
 - [ ] 审计出口事件写入失败时产生内部告警，不阻塞主流程但不得静默丢失
   - 未完成原因：业务入口尚未统一接 audit writer，也没有告警回路。
   - 下一步：审计写失败时写 tracing error + 自监控计数器 + 本地 fallback 队列。
-- [~] 提供本地查询接口，支持按时间、principal、action、result 检索
-  - 已完成：State Store 可 load 全量 audit chain。
-  - 未完成原因：还没有按条件查询 API。
-  - 下一步：新增 `query_audit_events(filter)`。
+- [x] 提供本地查询接口，支持按时间、principal、action、result 检索
+  - 已完成：State Store 新增 `AuditEventFilter` 与 `query_audit_events(filter)`，支持 principal/action/resource/result/time range 查询。
 - [~] **交付物**：Audit Chain 模块 + 审计字段规范 + 完整性校验工具
-  - 已完成：模块、字段、持久化和完整性校验核心。
-  - 未完成原因：CLI/工具化校验入口和查询 API 尚缺。
+  - 已完成：模块、字段、持久化、完整性校验核心和查询 API。
+  - 未完成原因：独立 CLI 校验工具尚未补齐。
 
 #### W1.7 文件传输安全（4 天）
 
-- [~] 路径白名单与穿越防护通过 PAL PathResolver 实现，拒绝 `../`、绝对路径逃逸、符号链接逃逸
-  - 已完成：现有 `resolve_managed_file_path` 拒绝绝对路径、父目录穿越，并限制在 managed-files 下，已有测试。
-  - 未完成原因：尚未改为 PAL PathResolver，符号链接逃逸测试未覆盖。
-  - 下一步：替换为 PAL PathResolver，并补 symlink escape 测试。
-- [ ] 文件大小限制、磁盘配额检查通过 PAL DiskSpace 实现
-  - 未完成原因：当前 upload/download 没有大小上限和磁盘余量检查。
-  - 下一步：新增 file transfer quota 配置，写入前查询 PAL DiskSpace。
+- [x] 路径白名单与穿越防护通过 PAL PathResolver 实现，拒绝 `../`、绝对路径逃逸、符号链接逃逸
+  - 已完成：`resolve_managed_file_path` 已改为调用 PAL `PathResolver`，现有绝对路径和父目录穿越测试通过；fallback resolver 负责拒绝 symlink escape。
+- [x] 文件大小限制、磁盘配额检查通过 PAL DiskSpace 实现
+  - 已完成：新增 `service.file_transfer.max_file_bytes` 和 `min_free_bytes`，上传前通过 PAL `DiskSpace` 检查余量，下载前拒绝超限文件。
 - [~] 分块 SHA-256 + 整体 SHA-256 双重校验，保留 FR-3.3 的 CRC32 兼容能力
   - 已完成：上传完成后计算整体 SHA-256 并返回 message；`sha256_file_hex` 有测试。
   - 未完成原因：协议没有 checksum 字段，尚未做分块校验、CRC32 兼容和服务端强校验。
   - 下一步：兼容扩展 proto 字段 `chunk_sha256` / `file_sha256` / `crc32`。
-- [ ] 断点续传与持久化任务状态写入 State Store
-  - 未完成原因：当前按 position 写文件，但任务状态没有持久化。
-  - 下一步：新增 `file_transfer_tasks` 表和 resume token。
+- [~] 断点续传与持久化任务状态写入 State Store
+  - 已完成：State Store 新增 `file_transfer_tasks` 表和 upsert/load API。
+  - 未完成原因：gRPC FileTransferService 还未把每次上传/下载状态写入该表，也未定义 resume token。
+  - 下一步：在 upload/download stream loop 写入 task 状态并返回 resume token。
 - [ ] 实现令牌桶限速，默认不限制，但支持全局与单任务限速配置
   - 未完成原因：未实现限速。
   - 下一步：在 upload/download stream loop 加 token bucket。
@@ -464,10 +449,8 @@
   - 下一步：补 TLS 测试夹具。
 - [x] 防重放测试：重复 nonce 拒绝、timestamp 超窗拒绝、nonce 过期清理
   - 已完成：`ReplayGuard` 单元测试覆盖重复 nonce 和 timestamp 超窗；过期清理在 check 流程中覆盖。
-- [~] 命令注入测试：shell 元字符、参数逃逸、未登记 command_id 均被拒绝
-  - 已完成：未登记 command_id、缺参数、角色不足均被拒绝；gRPC raw shell 仍禁用。
-  - 未完成原因：未显式加入 shell 元字符 payload 测试。
-  - 下一步：补 `process_name` 的字符集/长度约束和注入 payload 测试。
+- [x] 命令注入测试：shell 元字符、参数逃逸、未登记 command_id 均被拒绝
+  - 已完成：未登记 command_id、缺参数、角色不足、shell 元字符 payload、过长参数均有单元测试覆盖；gRPC raw shell 仍禁用。
 - [~] 路径穿越测试：`../`、绝对路径、符号链接逃逸、白名单目录外写入均被拒绝
   - 已完成：`../`、绝对路径、嵌套 parent dir 测试。
   - 未完成原因：符号链接逃逸、白名单外写入测试未补。
@@ -481,10 +464,8 @@
 - [ ] Fuzz 测试：manifest 解析、命令参数 schema、文件传输元数据
   - 未完成原因：未引入 fuzz harness。
   - 下一步：用 cargo-fuzz 或 proptest 先覆盖命令参数与文件元数据。
-- [~] CI 集成：`cargo audit`、`cargo fmt --check`、`cargo clippy`、三平台编译、核心安全测试
-  - 已完成：本地已跑 `cargo fmt`、`cargo check --workspace`、核心测试。
-  - 未完成原因：未跑 `cargo audit`/`clippy`，CI 配置未更新为安全测试矩阵。
-  - 下一步：更新 CI workflow，加 audit/clippy/security tests。
+- [x] CI 集成：`cargo audit`、`cargo fmt --check`、`cargo clippy`、三平台编译、核心安全测试
+  - 已完成：CI 已包含三平台 fmt/check/test、Linux clippy，并新增 Linux `cargo audit` 步骤。
 - [~] **交付物**：安全测试套件 + v0.8 安全测试报告 + 剩余风险清单
   - 已完成：核心单元测试和本节状态清单。
   - 未完成原因：还不是完整测试套件/正式报告。
@@ -524,10 +505,10 @@ trait SecurityCenter {
 #### 4.3.3 State Store 扩展
 
 - [x] `audit_events`：审计事件与哈希链
-- [ ] `security_keys`：密钥引用、用途、存储后端、安全等级
-- [ ] `rbac_policies`：角色、权限、资源映射
-- [ ] `replay_nonces`：短期 nonce 去重缓存
-- [ ] `file_transfer_tasks`：断点续传状态与校验状态
+- [x] `security_keys`：密钥引用、用途、存储后端、安全等级
+- [x] `rbac_policies`：角色、权限、资源映射
+- [x] `replay_nonces`：短期 nonce 去重缓存
+- [x] `file_transfer_tasks`：断点续传状态与校验状态
 
 ### 4.4 关键里程碑
 
