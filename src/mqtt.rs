@@ -5,7 +5,7 @@
 //! subscribes to command messages from the CC-Aggregator.
 
 use anyhow::{Context, Result};
-use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
+use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, Transport};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,6 +14,8 @@ use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info, warn};
 
 use crate::telemetry::TelemetryBundle;
+
+use crate::config::TlsConfig;
 
 /// Command received from the Aggregator via MQTT
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,10 +64,28 @@ impl Clone for MqttClient {
 impl MqttClient {
     /// Create a new MQTT client connection
     pub fn new(broker_host: &str, broker_port: u16, station_id: &str) -> Result<Self> {
+        Self::new_with_tls_config(broker_host, broker_port, station_id, None)
+    }
+
+    /// Create a new MQTT client connection with optional TLS client authentication.
+    pub fn new_with_tls_config(
+        broker_host: &str,
+        broker_port: u16,
+        station_id: &str,
+        tls: Option<&TlsConfig>,
+    ) -> Result<Self> {
         let client_id = format!("cc-station-{}", station_id);
         let mut mqttoptions = MqttOptions::new(client_id.clone(), broker_host, broker_port);
         mqttoptions.set_keep_alive(Duration::from_secs(30));
         mqttoptions.set_clean_session(true);
+        if let Some(tls) = tls
+            && tls.enabled
+        {
+            let ca = read_tls_file(tls.ca_cert_path.as_ref(), "mqtt.tls.ca_cert_path")?;
+            let cert = read_tls_file(tls.cert_path.as_ref(), "mqtt.tls.cert_path")?;
+            let key = read_tls_file(tls.key_path.as_ref(), "mqtt.tls.key_path")?;
+            mqttoptions.set_transport(Transport::tls(ca, Some((cert, key)), None));
+        }
 
         let (client, eventloop) = AsyncClient::new(mqttoptions, 100);
         let (worker_tx, mut worker_rx) = mpsc::channel::<MqttWorkerMsg>(100);
@@ -236,6 +256,11 @@ impl MqttClient {
         info!("Published station descriptor for: {}", self.station_id);
         Ok(())
     }
+}
+
+fn read_tls_file(path: Option<&std::path::PathBuf>, field: &str) -> Result<Vec<u8>> {
+    let path = path.ok_or_else(|| anyhow::anyhow!("{field} is required when TLS is enabled"))?;
+    std::fs::read(path).with_context(|| format!("read {field} from {}", path.display()))
 }
 
 /// Station status
