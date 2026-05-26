@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
-use ring::digest;
+use ring::{digest, hkdf, signature};
 use serde::{Deserialize, Serialize};
 
 pub type SecurityResult<T> = Result<T, SecurityError>;
@@ -12,6 +12,10 @@ pub enum SecurityError {
     ReplayDetected,
     #[error("timestamp is outside the allowed replay window")]
     TimestampOutOfWindow,
+    #[error("invalid key material")]
+    InvalidKeyMaterial,
+    #[error("signature verification failed")]
+    SignatureVerificationFailed,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -68,6 +72,115 @@ pub enum Action {
 pub enum Decision {
     Allow,
     Deny,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+pub enum AuthMethod {
+    Mtls,
+    SessionToken,
+    LocalSystem,
+    Anonymous,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SecurityLevel {
+    HardwareBacked,
+    OsKeyring,
+    FileBacked,
+    Volatile,
+}
+
+impl SecurityLevel {
+    pub fn from_capability_profile(profile: &pal_core::CapabilityProfile) -> Self {
+        if profile.has_tpm {
+            Self::HardwareBacked
+        } else if profile.has_os_keyring {
+            Self::OsKeyring
+        } else {
+            Self::FileBacked
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KeyMaterial {
+    InlinePublicKey(Vec<u8>),
+    StoreReference(String),
+    CredentialReference(String),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KeyRef {
+    pub name: String,
+    pub purpose: String,
+    pub security_level: SecurityLevel,
+    pub material: KeyMaterial,
+}
+
+impl KeyRef {
+    pub fn inline_public_key(name: impl Into<String>, public_key: &[u8]) -> Self {
+        Self {
+            name: name.into(),
+            purpose: "ed25519-verify".to_string(),
+            security_level: SecurityLevel::FileBacked,
+            material: KeyMaterial::InlinePublicKey(public_key.to_vec()),
+        }
+    }
+
+    pub fn store_reference(
+        name: impl Into<String>,
+        purpose: impl Into<String>,
+        security_level: SecurityLevel,
+    ) -> Self {
+        let name = name.into();
+        Self {
+            material: KeyMaterial::StoreReference(name.clone()),
+            name,
+            purpose: purpose.into(),
+            security_level,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeviceIdentityBinding {
+    pub device_id: String,
+    pub tenant_id: String,
+    pub dns_names: Vec<String>,
+    pub common_name: Option<String>,
+}
+
+impl DeviceIdentityBinding {
+    pub fn new(
+        device_id: impl Into<String>,
+        tenant_id: impl Into<String>,
+        dns_names: Vec<String>,
+        common_name: Option<String>,
+    ) -> Self {
+        Self {
+            device_id: device_id.into(),
+            tenant_id: tenant_id.into(),
+            dns_names,
+            common_name,
+        }
+    }
+
+    pub fn matches_device_id(&self, expected_device_id: &str) -> bool {
+        self.device_id == expected_device_id
+            || self.dns_names.iter().any(|name| name == expected_device_id)
+            || self.common_name.as_deref() == Some(expected_device_id)
+    }
+}
+
+impl From<pal_core::DeviceIdentity> for DeviceIdentityBinding {
+    fn from(identity: pal_core::DeviceIdentity) -> Self {
+        Self {
+            device_id: identity.device_id,
+            tenant_id: "default".to_string(),
+            dns_names: Vec::new(),
+            common_name: Some(identity.fingerprint),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +249,77 @@ pub struct SecurityRequest {
     pub nonce: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct RequestContext {
+    pub principal: Principal,
+    pub resource: Resource,
+    pub action: Action,
+    pub auth_method: AuthMethod,
+    pub timestamp: SystemTime,
+    pub nonce: String,
+    pub trace_id: String,
+}
+
+impl RequestContext {
+    pub fn new(
+        principal: Principal,
+        resource: Resource,
+        action: Action,
+        auth_method: AuthMethod,
+        timestamp: SystemTime,
+        nonce: impl Into<String>,
+        trace_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            principal,
+            resource,
+            action,
+            auth_method,
+            timestamp,
+            nonce: nonce.into(),
+            trace_id: trace_id.into(),
+        }
+    }
+
+    pub fn security_request(&self) -> SecurityRequest {
+        SecurityRequest::new(
+            self.principal.clone(),
+            self.resource,
+            self.action,
+            self.timestamp,
+            self.nonce.clone(),
+        )
+    }
+}
+
+pub trait SecurityCenter {
+    fn authenticate(&self, context: &RequestContext) -> SecurityResult<Principal>;
+
+    fn authorize(&mut self, context: &RequestContext, now: SystemTime) -> SecurityResult<Decision>;
+
+    fn verify_device_identity(
+        &self,
+        binding: &DeviceIdentityBinding,
+        expected_device_id: &str,
+    ) -> SecurityResult<()>;
+
+    fn verify_signature(
+        &self,
+        payload: &[u8],
+        signature: &[u8],
+        key_ref: &KeyRef,
+    ) -> SecurityResult<()>;
+
+    fn check_replay(
+        &mut self,
+        principal: &Principal,
+        action: Action,
+        timestamp: SystemTime,
+        nonce: &str,
+        now: SystemTime,
+    ) -> SecurityResult<()>;
+}
+
 impl SecurityRequest {
     pub fn new(
         principal: Principal,
@@ -189,6 +373,49 @@ impl BasicSecurityCenter {
         )?;
 
         Ok(Decision::Allow)
+    }
+}
+
+impl SecurityCenter for BasicSecurityCenter {
+    fn authenticate(&self, context: &RequestContext) -> SecurityResult<Principal> {
+        Ok(context.principal.clone())
+    }
+
+    fn authorize(&mut self, context: &RequestContext, now: SystemTime) -> SecurityResult<Decision> {
+        self.authorize_request(&context.security_request(), now)
+    }
+
+    fn verify_device_identity(
+        &self,
+        binding: &DeviceIdentityBinding,
+        expected_device_id: &str,
+    ) -> SecurityResult<()> {
+        if binding.matches_device_id(expected_device_id) {
+            Ok(())
+        } else {
+            Err(SecurityError::InvalidKeyMaterial)
+        }
+    }
+
+    fn verify_signature(
+        &self,
+        payload: &[u8],
+        signature: &[u8],
+        key_ref: &KeyRef,
+    ) -> SecurityResult<()> {
+        verify_ed25519_signature(payload, signature, key_ref)
+    }
+
+    fn check_replay(
+        &mut self,
+        principal: &Principal,
+        action: Action,
+        timestamp: SystemTime,
+        nonce: &str,
+        now: SystemTime,
+    ) -> SecurityResult<()> {
+        self.replay_guard
+            .check(principal, action, timestamp, nonce, now)
     }
 }
 
@@ -280,6 +507,7 @@ pub struct AuditEvent {
 }
 
 impl AuditEvent {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         event_id: impl Into<String>,
         timestamp: SystemTime,
@@ -375,6 +603,41 @@ impl AuditChain {
     }
 }
 
+pub fn derive_hkdf_sha256(
+    root_key: &[u8],
+    salt: &[u8],
+    purpose: &[u8],
+    output_len: usize,
+) -> SecurityResult<Vec<u8>> {
+    let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, salt);
+    let prk = salt.extract(root_key);
+    let info = [purpose];
+    let okm = prk
+        .expand(&info, hkdf::HKDF_SHA256)
+        .map_err(|_| SecurityError::InvalidKeyMaterial)?;
+    let mut output = vec![0u8; output_len];
+    okm.fill(&mut output)
+        .map_err(|_| SecurityError::InvalidKeyMaterial)?;
+    Ok(output)
+}
+
+pub fn verify_ed25519_signature(
+    payload: &[u8],
+    signature_bytes: &[u8],
+    key_ref: &KeyRef,
+) -> SecurityResult<()> {
+    let public_key = match &key_ref.material {
+        KeyMaterial::InlinePublicKey(public_key) => public_key.as_slice(),
+        KeyMaterial::StoreReference(_) | KeyMaterial::CredentialReference(_) => {
+            return Err(SecurityError::InvalidKeyMaterial);
+        }
+    };
+    let peer_public_key = signature::UnparsedPublicKey::new(&signature::ED25519, public_key);
+    peer_public_key
+        .verify(payload, signature_bytes)
+        .map_err(|_| SecurityError::SignatureVerificationFailed)
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -388,6 +651,8 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ring::rand::SystemRandom;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
     use std::time::{Duration, SystemTime};
 
     fn readonly_principal() -> Principal {
@@ -498,6 +763,66 @@ mod tests {
 
         assert_eq!(center.authorize_request(&request, now), Ok(Decision::Deny));
         assert_eq!(center.authorize_request(&request, now), Ok(Decision::Deny));
+    }
+
+    #[test]
+    fn security_center_trait_authorizes_request_context() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let mut center = BasicSecurityCenter::new(
+            RbacPolicy::default(),
+            ReplayGuard::new(Duration::from_secs(300)),
+        );
+        let context = RequestContext::new(
+            Principal::new("tenant-a", "device-1", "operator-user", Role::Operator),
+            Resource::ControlCommand,
+            Action::Execute,
+            AuthMethod::Mtls,
+            now,
+            "nonce-1",
+            "trace-1",
+        );
+
+        assert_eq!(center.authorize(&context, now), Ok(Decision::Allow));
+    }
+
+    #[test]
+    fn hkdf_derives_different_keys_for_different_purposes() {
+        let root = b"root-secret-material-for-device";
+        let audit = derive_hkdf_sha256(root, b"tenant-a/device-1", b"audit-chain", 32).unwrap();
+        let config =
+            derive_hkdf_sha256(root, b"tenant-a/device-1", b"config-encryption", 32).unwrap();
+
+        assert_eq!(audit.len(), 32);
+        assert_ne!(audit, config);
+    }
+
+    #[test]
+    fn ed25519_verifier_accepts_valid_signature_and_rejects_tampering() {
+        let rng = SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let payload = b"signed config payload";
+        let signature = pair.sign(payload);
+        let key_ref = KeyRef::inline_public_key("config-signing", pair.public_key().as_ref());
+
+        verify_ed25519_signature(payload, signature.as_ref(), &key_ref).unwrap();
+        assert_eq!(
+            verify_ed25519_signature(b"tampered", signature.as_ref(), &key_ref),
+            Err(SecurityError::SignatureVerificationFailed)
+        );
+    }
+
+    #[test]
+    fn certificate_identity_binding_requires_matching_device_id() {
+        let binding = DeviceIdentityBinding::new(
+            "device-1",
+            "tenant-a",
+            vec!["device-1".to_string(), "agent.local".to_string()],
+            Some("agent-cn".to_string()),
+        );
+
+        assert!(binding.matches_device_id("device-1"));
+        assert!(!binding.matches_device_id("device-2"));
     }
 
     #[test]
