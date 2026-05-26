@@ -21,6 +21,9 @@ name = "agent-core"
 version = "0.1.0"
 dependencies = [
  "pal-core",
+ "ring",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -37,6 +40,7 @@ dependencies = [
 name = "agent-store"
 version = "0.1.0"
 dependencies = [
+ "agent-core",
  "chrono",
  "pal-core",
  "rusqlite",
@@ -290,6 +294,7 @@ dependencies = [
  "prost",
  "protoc-bin-vendored",
  "regex",
+ "ring",
  "rumqttc",
  "rusqlite",
  "screenshots",

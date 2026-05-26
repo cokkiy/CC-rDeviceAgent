@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+agent-core = { path = "../agent-core" }
 chrono.workspace = true
 pal-core = { path = "../pal-core" }
 rusqlite.workspace = true

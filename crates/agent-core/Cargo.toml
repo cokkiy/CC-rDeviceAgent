@@ -6,4 +6,7 @@ authors.workspace = true
 
 [dependencies]
 pal-core = { path = "../pal-core" }
+ring = "0.17.14"
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
