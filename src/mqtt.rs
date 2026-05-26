@@ -75,8 +75,8 @@ impl MqttClient {
         tls: Option<&TlsConfig>,
     ) -> Result<Self> {
         let client_id = format!("cc-station-{}", station_id);
-        let mut mqttoptions = MqttOptions::new(client_id.clone(), broker_host, broker_port);
-        mqttoptions.set_keep_alive(Duration::from_secs(30));
+        let mut mqttoptions = MqttOptions::new(client_id.clone(), (broker_host, broker_port));
+        mqttoptions.set_keep_alive(30);
         mqttoptions.set_clean_session(true);
         if let Some(tls) = tls
             && tls.enabled
@@ -87,7 +87,7 @@ impl MqttClient {
             mqttoptions.set_transport(Transport::tls(ca, Some((cert, key)), None));
         }
 
-        let (client, eventloop) = AsyncClient::new(mqttoptions, 100);
+        let (client, eventloop) = AsyncClient::builder(mqttoptions).capacity(100).build();
         let (worker_tx, mut worker_rx) = mpsc::channel::<MqttWorkerMsg>(100);
 
         let client_for_worker = client.clone();
@@ -136,7 +136,7 @@ impl MqttClient {
                         match notification {
                             Ok(event) => {
                                 if let Event::Incoming(Packet::Publish(publish)) = event {
-                                    let topic = publish.topic.clone();
+                                    let topic = String::from_utf8_lossy(&publish.topic).to_string();
 
                                     // Look up handler for this topic
                                     let handlers_lock = handlers.lock().await;
