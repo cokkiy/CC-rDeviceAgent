@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_stream::try_stream;
 use futures_util::Stream;
+use ring::digest;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::watch;
@@ -41,6 +42,11 @@ pub async fn run(
     console_telemetry: bool,
 ) -> Result<()> {
     let (config, resolved_config_path) = AppConfig::load_with_path(config_path.as_deref())?;
+    if config.control.tls.enabled {
+        anyhow::bail!(
+            "control.tls.enabled is configured but gRPC mTLS server wiring is not complete; refusing plaintext startup"
+        );
+    }
     let service_path = std::env::current_exe().context("resolve current executable")?;
     let state = Arc::new(AppState::new(config, resolved_config_path, service_path)?);
     let listen_addr = state.listen_addr()?;
@@ -575,12 +581,17 @@ impl FileTransfer for FileTransferService {
             }
         }
 
+        let finalized_path = current_path.clone();
         finalize_upload(current_path, current_file).await?;
 
-        Ok(Response::new(UploadResult {
-            ok: true,
-            message: "upload completed".to_string(),
-        }))
+        let message = if let Some(path) = finalized_path {
+            let sha256 = sha256_file_hex(&path).await.map_err(status_from_error)?;
+            format!("upload completed; sha256={sha256}")
+        } else {
+            "upload completed".to_string()
+        };
+
+        Ok(Response::new(UploadResult { ok: true, message }))
     }
 
     async fn download(
@@ -849,6 +860,37 @@ async fn looks_executable(path: &Path) -> Result<bool> {
         || (read >= 2 && &buffer[..2] == b"MZ"))
 }
 
+async fn sha256_file_hex(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .await
+        .with_context(|| format!("open file for sha256 {}", path.display()))?;
+    let mut context = digest::Context::new(&digest::SHA256);
+    let mut buffer = vec![0u8; 64 * 1024];
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .with_context(|| format!("read file for sha256 {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        context.update(&buffer[..read]);
+    }
+
+    Ok(hex_encode(context.finish().as_ref()))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
 async fn remove_existing_path(path: &Path) -> Result<()> {
     let metadata = fs::metadata(path)
         .await
@@ -997,5 +1039,22 @@ mod tests {
         assert!(resolve_managed_file_path(&state, "/etc/passwd").is_err());
         assert!(resolve_managed_file_path(&state, "../outside").is_err());
         assert!(resolve_managed_file_path(&state, "nested/../../outside").is_err());
+    }
+
+    #[tokio::test]
+    async fn sha256_file_digest_matches_known_value() {
+        let path = std::env::temp_dir().join(format!(
+            "cc-rdeviceagent-sha256-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        tokio::fs::write(&path, b"abc").await.unwrap();
+
+        let digest = sha256_file_hex(&path).await.unwrap();
+
+        assert_eq!(
+            digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let _ = tokio::fs::remove_file(path).await;
     }
 }

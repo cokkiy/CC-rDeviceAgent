@@ -30,6 +30,7 @@ pub struct ServiceConfig {
 #[serde(default)]
 pub struct ControlConfig {
     pub listen_addr: String,
+    pub tls: TlsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -49,6 +50,17 @@ pub struct MqttConfig {
     pub telemetry_enabled: bool,
     pub status_enabled: bool,
     pub telemetry_profiles: Vec<TelemetryProfileConfig>,
+    pub tls: TlsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct TlsConfig {
+    pub enabled: bool,
+    pub ca_cert_path: Option<PathBuf>,
+    pub cert_path: Option<PathBuf>,
+    pub key_path: Option<PathBuf>,
+    pub require_client_auth: bool,
 }
 
 impl Default for ServiceConfig {
@@ -68,6 +80,7 @@ impl Default for ControlConfig {
     fn default() -> Self {
         Self {
             listen_addr: "0.0.0.0:50051".to_string(),
+            tls: TlsConfig::default(),
         }
     }
 }
@@ -91,6 +104,7 @@ impl Default for MqttConfig {
             telemetry_enabled: true,
             status_enabled: true,
             telemetry_profiles: Vec::new(),
+            tls: TlsConfig::default(),
         }
     }
 }
@@ -121,6 +135,8 @@ impl AppConfig {
     pub fn validate(&self) -> Result<()> {
         validate_profiles(&self.mqtt.telemetry_profiles)
             .map_err(|error| anyhow::anyhow!("invalid mqtt.telemetry_profiles: {error}"))?;
+        validate_tls_config("control.tls", &self.control.tls)?;
+        validate_tls_config("mqtt.tls", &self.mqtt.tls)?;
         Ok(())
     }
 
@@ -143,6 +159,24 @@ impl AppConfig {
 
         format!("{host}-{}", Uuid::new_v4())
     }
+}
+
+fn validate_tls_config(name: &str, tls: &TlsConfig) -> Result<()> {
+    if !tls.enabled {
+        return Ok(());
+    }
+
+    if tls.ca_cert_path.is_none() {
+        anyhow::bail!("{name}.ca_cert_path is required when TLS is enabled");
+    }
+    if tls.cert_path.is_none() {
+        anyhow::bail!("{name}.cert_path is required when TLS is enabled");
+    }
+    if tls.key_path.is_none() {
+        anyhow::bail!("{name}.key_path is required when TLS is enabled");
+    }
+
+    Ok(())
 }
 
 pub fn default_config_path() -> PathBuf {
@@ -201,5 +235,42 @@ mod tests {
         };
 
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn config_validation_requires_grpc_mtls_material_when_enabled() {
+        let config = AppConfig {
+            control: ControlConfig {
+                tls: TlsConfig {
+                    enabled: true,
+                    ..TlsConfig::default()
+                },
+                ..ControlConfig::default()
+            },
+            ..AppConfig::default()
+        };
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("control.tls.ca_cert_path"));
+    }
+
+    #[test]
+    fn config_validation_requires_mqtt_client_cert_when_tls_enabled() {
+        let config = AppConfig {
+            mqtt: MqttConfig {
+                tls: TlsConfig {
+                    enabled: true,
+                    ca_cert_path: Some(PathBuf::from("ca.pem")),
+                    cert_path: Some(PathBuf::from("client.pem")),
+                    key_path: None,
+                    require_client_auth: true,
+                },
+                ..MqttConfig::default()
+            },
+            ..AppConfig::default()
+        };
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("mqtt.tls.key_path"));
     }
 }

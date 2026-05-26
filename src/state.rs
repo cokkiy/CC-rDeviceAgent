@@ -16,6 +16,9 @@ use sysinfo::Disks;
 use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, Networks, Pid, ProcessesToUpdate, System};
 use tokio::sync::watch;
 
+use agent_core::command_policy::{CommandPolicy, CommandPolicyError};
+use agent_core::security::{Principal, Role};
+
 use crate::config::AppConfig;
 use crate::grpc::cc::{
     AppRunningState, AppsRunningStateEnvelope, ConnectionInformation, GetAllProcessInfoResponse,
@@ -66,10 +69,11 @@ impl AppState {
 
         // Initialize MQTT client if enabled
         let mqtt_client = if config.mqtt.enabled {
-            match MqttClient::new(
+            match MqttClient::new_with_tls_config(
                 &config.mqtt.broker_host,
                 config.mqtt.broker_port,
                 &station_id,
+                Some(&config.mqtt.tls),
             ) {
                 Ok(client) => {
                     tracing::info!("MQTT client initialized for station: {}", station_id);
@@ -260,24 +264,37 @@ impl AppState {
             command.command, command.command_id
         );
 
-        match command.command.as_str() {
-            "restart_process" => {
-                // Get the process name from params
-                let process_name = command
-                    .params
-                    .get("process_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-
-                if process_name.is_empty() {
+        let principal = Principal::new(
+            "default",
+            self.station_id.clone(),
+            "mqtt-backend",
+            Role::Operator,
+        );
+        let command_policy = CommandPolicy::default();
+        let validated_command =
+            match command_policy.validate(&principal, &command.command, &command.params) {
+                Ok(validated_command) => validated_command,
+                Err(error) => {
+                    warn!(
+                        "Rejected MQTT command by command policy: {} ({})",
+                        command.command, error
+                    );
                     return CommandAck {
                         command_id: command.command_id.clone(),
                         success: false,
-                        message: "process_name is required".to_string(),
+                        message: command_policy_error_message(error),
                         timestamp,
                     };
                 }
+            };
+
+        match validated_command.command_id.as_str() {
+            "restart_process" => {
+                // Get the process name from params
+                let process_name = validated_command
+                    .argument("process_name")
+                    .expect("validated restart_process includes process_name")
+                    .to_string();
 
                 // Find and restart the process
                 let pids = crate::state::find_process_ids_by_name(&process_name);
@@ -306,11 +323,11 @@ impl AppState {
                 }
             }
             _ => {
-                warn!("Unknown MQTT command: {}", command.command);
+                warn!("Unknown validated MQTT command: {}", command.command);
                 CommandAck {
                     command_id: command.command_id.clone(),
                     success: false,
-                    message: format!("Unknown command: {}", command.command),
+                    message: format!("Unknown whitelisted command: {}", command.command),
                     timestamp,
                 }
             }
@@ -635,6 +652,21 @@ impl AppState {
                 station_id: self.station_id.clone(),
                 ..Default::default()
             },
+        }
+    }
+}
+
+fn command_policy_error_message(error: CommandPolicyError) -> String {
+    match error {
+        CommandPolicyError::UnknownCommand => "command is not whitelisted".to_string(),
+        CommandPolicyError::RoleNotAllowed => {
+            "principal role is not allowed to execute command".to_string()
+        }
+        CommandPolicyError::MissingParameter(name) => {
+            format!("missing required parameter: {name}")
+        }
+        CommandPolicyError::InvalidParameterType(name) => {
+            format!("invalid parameter type: {name}")
         }
     }
 }
@@ -1125,5 +1157,33 @@ mod tests {
         let original = sorted.clone();
         sorted.sort();
         assert_eq!(original, sorted);
+    }
+
+    #[test]
+    fn mqtt_command_handler_rejects_unknown_commands_before_execution() {
+        let state = make_state();
+        let ack = state.handle_mqtt_command(&Command {
+            command_id: "cmd-1".to_string(),
+            command: "rm_rf".to_string(),
+            params: serde_json::json!({}),
+            timestamp: 1_000,
+        });
+
+        assert!(!ack.success);
+        assert!(ack.message.contains("not whitelisted"));
+    }
+
+    #[test]
+    fn mqtt_command_handler_rejects_restart_process_without_required_parameter() {
+        let state = make_state();
+        let ack = state.handle_mqtt_command(&Command {
+            command_id: "cmd-1".to_string(),
+            command: "restart_process".to_string(),
+            params: serde_json::json!({}),
+            timestamp: 1_000,
+        });
+
+        assert!(!ack.success);
+        assert!(ack.message.contains("missing required parameter"));
     }
 }

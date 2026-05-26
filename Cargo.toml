@@ -95,6 +95,7 @@ agent-store = { path = "crates/agent-store" }
 agent-telemetry = { path = "crates/agent-telemetry" }
 pal-core = { path = "crates/pal-core" }
 pal-fallback = { path = "crates/pal-fallback" }
+ring = "0.17.14"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
