@@ -24,6 +24,14 @@ pub struct ServiceConfig {
     pub watched_processes: Vec<String>,
     pub udp_display_target: String,
     pub launcher_proxy_path: String,
+    pub file_transfer: FileTransferConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FileTransferConfig {
+    pub max_file_bytes: u64,
+    pub min_free_bytes: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -72,6 +80,16 @@ impl Default for ServiceConfig {
             watched_processes: Vec::new(),
             udp_display_target: "127.0.0.1:9008".to_string(),
             launcher_proxy_path: String::new(),
+            file_transfer: FileTransferConfig::default(),
+        }
+    }
+}
+
+impl Default for FileTransferConfig {
+    fn default() -> Self {
+        Self {
+            max_file_bytes: 512 * 1024 * 1024,
+            min_free_bytes: 64 * 1024 * 1024,
         }
     }
 }
