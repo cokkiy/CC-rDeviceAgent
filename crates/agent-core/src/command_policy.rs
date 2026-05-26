@@ -16,12 +16,17 @@ pub enum CommandPolicyError {
     MissingParameter(String),
     #[error("invalid parameter type for: {0}")]
     InvalidParameterType(String),
+    #[error("invalid parameter value for: {0}")]
+    InvalidParameterValue(String),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ValidatedCommand {
     pub command_id: String,
     args: HashMap<String, String>,
+    pub timeout_ms: u64,
+    pub resource_limits: Option<CommandResourceLimits>,
+    pub sandbox_profile: Option<String>,
 }
 
 impl ValidatedCommand {
@@ -45,9 +50,19 @@ impl Default for CommandPolicy {
                     allowed_roles: HashSet::from([Role::Admin, Role::Operator]),
                     parameters: vec![ParameterSpec {
                         name: "process_name".to_string(),
-                        kind: ParameterKind::String,
+                        kind: ParameterKind::String {
+                            max_len: 128,
+                            allow_shell_metacharacters: false,
+                        },
                         required: true,
                     }],
+                    timeout_ms: 30_000,
+                    resource_limits: Some(CommandResourceLimits {
+                        memory_bytes: None,
+                        cpu_millis: Some(10_000),
+                        open_files: Some(64),
+                    }),
+                    sandbox_profile: Some("process-control".to_string()),
                 },
             )]),
         }
@@ -55,6 +70,15 @@ impl Default for CommandPolicy {
 }
 
 impl CommandPolicy {
+    pub fn from_templates(templates: Vec<CommandTemplate>) -> Self {
+        Self {
+            commands: templates
+                .into_iter()
+                .map(|template| (template.command_id.clone(), template))
+                .collect(),
+        }
+    }
+
     pub fn validate(
         &self,
         principal: &Principal,
@@ -79,12 +103,22 @@ impl CommandPolicy {
             };
 
             match parameter.kind {
-                ParameterKind::String => {
+                ParameterKind::String {
+                    max_len,
+                    allow_shell_metacharacters,
+                } => {
                     let value = value.as_str().ok_or_else(|| {
                         CommandPolicyError::InvalidParameterType(parameter.name.clone())
                     })?;
                     if value.trim().is_empty() {
                         return Err(CommandPolicyError::MissingParameter(parameter.name.clone()));
+                    }
+                    if value.len() > max_len
+                        || (!allow_shell_metacharacters && contains_shell_metacharacter(value))
+                    {
+                        return Err(CommandPolicyError::InvalidParameterValue(
+                            parameter.name.clone(),
+                        ));
                     }
                     args.insert(parameter.name.clone(), value.to_string());
                 }
@@ -94,27 +128,49 @@ impl CommandPolicy {
         Ok(ValidatedCommand {
             command_id: template.command_id.clone(),
             args,
+            timeout_ms: template.timeout_ms,
+            resource_limits: template.resource_limits.clone(),
+            sandbox_profile: template.sandbox_profile.clone(),
         })
     }
 }
 
-#[derive(Debug, Clone)]
-struct CommandTemplate {
-    command_id: String,
-    allowed_roles: HashSet<Role>,
-    parameters: Vec<ParameterSpec>,
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CommandTemplate {
+    pub command_id: String,
+    pub allowed_roles: HashSet<Role>,
+    pub parameters: Vec<ParameterSpec>,
+    pub timeout_ms: u64,
+    pub resource_limits: Option<CommandResourceLimits>,
+    pub sandbox_profile: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-struct ParameterSpec {
-    name: String,
-    kind: ParameterKind,
-    required: bool,
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ParameterSpec {
+    pub name: String,
+    pub kind: ParameterKind,
+    pub required: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ParameterKind {
-    String,
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ParameterKind {
+    String {
+        max_len: usize,
+        allow_shell_metacharacters: bool,
+    },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CommandResourceLimits {
+    pub memory_bytes: Option<u64>,
+    pub cpu_millis: Option<u64>,
+    pub open_files: Option<u64>,
+}
+
+fn contains_shell_metacharacter(value: &str) -> bool {
+    value
+        .chars()
+        .any(|ch| matches!(ch, ';' | '&' | '|' | '`' | '$' | '<' | '>' | '\n' | '\r'))
 }
 
 #[cfg(test)]
@@ -176,5 +232,66 @@ mod tests {
 
         assert_eq!(command.command_id, "restart_process");
         assert_eq!(command.argument("process_name"), Some("nginx"));
+    }
+
+    #[test]
+    fn rejects_shell_metacharacters_and_overlong_parameters() {
+        let policy = CommandPolicy::default();
+        let principal = Principal::new("tenant-a", "device-1", "operator-user", Role::Operator);
+
+        assert_eq!(
+            policy.validate(
+                &principal,
+                "restart_process",
+                &json!({ "process_name": "nginx; rm -rf /" })
+            ),
+            Err(CommandPolicyError::InvalidParameterValue(
+                "process_name".to_string()
+            ))
+        );
+        assert_eq!(
+            policy.validate(
+                &principal,
+                "restart_process",
+                &json!({ "process_name": "a".repeat(129) })
+            ),
+            Err(CommandPolicyError::InvalidParameterValue(
+                "process_name".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn accepts_configured_command_template_with_runtime_controls() {
+        let policy = CommandPolicy::from_templates(vec![CommandTemplate {
+            command_id: "collect_logs".to_string(),
+            allowed_roles: HashSet::from([Role::Admin]),
+            parameters: vec![ParameterSpec {
+                name: "profile".to_string(),
+                kind: ParameterKind::String {
+                    max_len: 32,
+                    allow_shell_metacharacters: false,
+                },
+                required: true,
+            }],
+            timeout_ms: 5_000,
+            resource_limits: Some(CommandResourceLimits {
+                memory_bytes: Some(64 * 1024 * 1024),
+                cpu_millis: Some(1_000),
+                open_files: Some(32),
+            }),
+            sandbox_profile: Some("read-only-diagnostics".to_string()),
+        }]);
+        let principal = Principal::new("tenant-a", "device-1", "admin-user", Role::Admin);
+        let command = policy
+            .validate(&principal, "collect_logs", &json!({ "profile": "default" }))
+            .unwrap();
+
+        assert_eq!(command.timeout_ms, 5_000);
+        assert_eq!(
+            command.sandbox_profile.as_deref(),
+            Some("read-only-diagnostics")
+        );
+        assert_eq!(command.resource_limits.unwrap().open_files, Some(32));
     }
 }

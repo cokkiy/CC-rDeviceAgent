@@ -1,6 +1,7 @@
 use std::path::Path;
+use std::time::SystemTime;
 
-use agent_core::security::{AuditChain, AuditEvent};
+use agent_core::security::{Action, AuditChain, AuditEvent, Resource};
 use rusqlite::{Connection, OptionalExtension, params};
 
 pub type StoreResult<T> = Result<T, StoreError>;
@@ -17,6 +18,43 @@ pub const LATEST_SCHEMA_VERSION: i64 = 1;
 
 pub struct StateStore {
     connection: Connection,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SecurityKeyRecord {
+    pub name: String,
+    pub purpose: String,
+    pub provider: String,
+    pub reference: String,
+    pub security_level: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RbacPolicyRecord {
+    pub role: String,
+    pub resource: Resource,
+    pub action: Action,
+    pub allowed: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct FileTransferTaskRecord {
+    pub task_id: String,
+    pub file_name: String,
+    pub direction: String,
+    pub state: String,
+    pub offset: i64,
+    pub file_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct AuditEventFilter {
+    pub principal: Option<String>,
+    pub action: Option<Action>,
+    pub resource: Option<Resource>,
+    pub result: Option<String>,
+    pub since: Option<SystemTime>,
+    pub until: Option<SystemTime>,
 }
 
 impl StateStore {
@@ -144,26 +182,215 @@ impl StateStore {
              FROM audit_events
              ORDER BY sequence ASC",
         )?;
-        let rows = stmt.query_map([], |row| {
-            let event_json: String = row.get(0)?;
-            let mut event: AuditEvent = serde_json::from_str(&event_json).map_err(|err| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Text,
-                    Box::new(err),
-                )
-            })?;
-            event.result = row.get(1)?;
-            event.prev_hash = row.get(2)?;
-            event.hash = row.get(3)?;
-            Ok(event)
-        })?;
+        let rows = stmt.query_map([], row_to_audit_event)?;
 
         let mut chain = AuditChain::default();
         for row in rows {
             chain.push_stored(row?);
         }
         Ok(chain)
+    }
+
+    pub fn query_audit_events(&self, filter: &AuditEventFilter) -> StoreResult<Vec<AuditEvent>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT event_json, result, prev_hash, hash
+             FROM audit_events
+             WHERE (?1 IS NULL OR principal = ?1)
+               AND (?2 IS NULL OR action = ?2)
+               AND (?3 IS NULL OR resource = ?3)
+               AND (?4 IS NULL OR result = ?4)
+               AND (?5 IS NULL OR timestamp_unix_ms >= ?5)
+               AND (?6 IS NULL OR timestamp_unix_ms <= ?6)
+             ORDER BY sequence ASC",
+        )?;
+        let action = filter.action.map(|action| format!("{action:?}"));
+        let resource = filter.resource.map(|resource| format!("{resource:?}"));
+        let since = filter.since.map(system_time_to_unix_ms);
+        let until = filter.until.map(system_time_to_unix_ms);
+        let rows = stmt.query_map(
+            params![
+                filter.principal.as_deref(),
+                action.as_deref(),
+                resource.as_deref(),
+                filter.result.as_deref(),
+                since,
+                until,
+            ],
+            row_to_audit_event,
+        )?;
+
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?);
+        }
+        Ok(events)
+    }
+
+    pub fn upsert_security_key(&self, record: &SecurityKeyRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO security_keys(name, purpose, provider, reference, security_level)
+             VALUES(?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(name) DO UPDATE SET
+               purpose = excluded.purpose,
+               provider = excluded.provider,
+               reference = excluded.reference,
+               security_level = excluded.security_level,
+               updated_at = CURRENT_TIMESTAMP",
+            params![
+                record.name,
+                record.purpose,
+                record.provider,
+                record.reference,
+                record.security_level
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_security_key(&self, name: &str) -> StoreResult<Option<SecurityKeyRecord>> {
+        self.connection
+            .query_row(
+                "SELECT name, purpose, provider, reference, security_level
+                 FROM security_keys
+                 WHERE name = ?1",
+                params![name],
+                |row| {
+                    Ok(SecurityKeyRecord {
+                        name: row.get(0)?,
+                        purpose: row.get(1)?,
+                        provider: row.get(2)?,
+                        reference: row.get(3)?,
+                        security_level: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn upsert_rbac_policy(&self, record: &RbacPolicyRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO rbac_policies(role, resource, action, allowed)
+             VALUES(?1, ?2, ?3, ?4)
+             ON CONFLICT(role, resource, action) DO UPDATE SET
+               allowed = excluded.allowed,
+               updated_at = CURRENT_TIMESTAMP",
+            params![
+                record.role,
+                format!("{:?}", record.resource),
+                format!("{:?}", record.action),
+                record.allowed
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_rbac_policies(&self) -> StoreResult<Vec<RbacPolicyRecord>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT role, resource, action, allowed
+             FROM rbac_policies
+             ORDER BY role, resource, action",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let resource: String = row.get(1)?;
+            let action: String = row.get(2)?;
+            Ok(RbacPolicyRecord {
+                role: row.get(0)?,
+                resource: parse_resource(&resource).map_err(to_sql_conversion_error)?,
+                action: parse_action(&action).map_err(to_sql_conversion_error)?,
+                allowed: row.get(3)?,
+            })
+        })?;
+
+        let mut policies = Vec::new();
+        for row in rows {
+            policies.push(row?);
+        }
+        Ok(policies)
+    }
+
+    pub fn try_insert_replay_nonce(
+        &self,
+        tenant_id: &str,
+        device_id: &str,
+        principal: &str,
+        action: Action,
+        nonce: &str,
+        timestamp: SystemTime,
+    ) -> StoreResult<bool> {
+        let inserted = self.connection.execute(
+            "INSERT OR IGNORE INTO replay_nonces(
+                tenant_id, device_id, principal, action, nonce, timestamp_unix_ms
+             )
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                tenant_id,
+                device_id,
+                principal,
+                format!("{action:?}"),
+                nonce,
+                system_time_to_unix_ms(timestamp)
+            ],
+        )?;
+        Ok(inserted == 1)
+    }
+
+    pub fn prune_replay_nonces(&self, older_than: SystemTime) -> StoreResult<usize> {
+        self.connection
+            .execute(
+                "DELETE FROM replay_nonces WHERE timestamp_unix_ms < ?1",
+                params![system_time_to_unix_ms(older_than)],
+            )
+            .map_err(StoreError::from)
+    }
+
+    pub fn upsert_file_transfer_task(&self, record: &FileTransferTaskRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO file_transfer_tasks(
+                task_id, file_name, direction, state, offset, file_sha256
+             )
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(task_id) DO UPDATE SET
+               file_name = excluded.file_name,
+               direction = excluded.direction,
+               state = excluded.state,
+               offset = excluded.offset,
+               file_sha256 = excluded.file_sha256,
+               updated_at = CURRENT_TIMESTAMP",
+            params![
+                record.task_id,
+                record.file_name,
+                record.direction,
+                record.state,
+                record.offset,
+                record.file_sha256
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_file_transfer_tasks(&self) -> StoreResult<Vec<FileTransferTaskRecord>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT task_id, file_name, direction, state, offset, file_sha256
+             FROM file_transfer_tasks
+             ORDER BY updated_at ASC, task_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(FileTransferTaskRecord {
+                task_id: row.get(0)?,
+                file_name: row.get(1)?,
+                direction: row.get(2)?,
+                state: row.get(3)?,
+                offset: row.get(4)?,
+                file_sha256: row.get(5)?,
+            })
+        })?;
+
+        let mut tasks = Vec::new();
+        for row in rows {
+            tasks.push(row?);
+        }
+        Ok(tasks)
     }
 
     pub fn backup_to(&self, path: impl AsRef<Path>) -> StoreResult<()> {
@@ -268,6 +495,51 @@ CREATE TABLE IF NOT EXISTS key_refs (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS security_keys (
+    name TEXT PRIMARY KEY,
+    purpose TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    security_level TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS rbac_policies (
+    role TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    action TEXT NOT NULL,
+    allowed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(role, resource, action)
+);
+
+CREATE TABLE IF NOT EXISTS replay_nonces (
+    tenant_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    action TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    timestamp_unix_ms INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(tenant_id, device_id, principal, action, nonce)
+);
+
+CREATE INDEX IF NOT EXISTS idx_replay_nonces_timestamp
+ON replay_nonces(timestamp_unix_ms);
+
+CREATE TABLE IF NOT EXISTS file_transfer_tasks (
+    task_id TEXT PRIMARY KEY,
+    file_name TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    state TEXT NOT NULL,
+    offset INTEGER NOT NULL DEFAULT 0,
+    file_sha256 TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS capability_profile_cache (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     profile_json TEXT NOT NULL,
@@ -275,9 +547,59 @@ CREATE TABLE IF NOT EXISTS capability_profile_cache (
 );
 ";
 
+fn row_to_audit_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEvent> {
+    let event_json: String = row.get(0)?;
+    let mut event: AuditEvent = serde_json::from_str(&event_json).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+    event.result = row.get(1)?;
+    event.prev_hash = row.get(2)?;
+    event.hash = row.get(3)?;
+    Ok(event)
+}
+
+fn system_time_to_unix_ms(time: SystemTime) -> i64 {
+    time.duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
+}
+
+fn parse_action(value: &str) -> Result<Action, String> {
+    match value {
+        "Read" => Ok(Action::Read),
+        "Execute" => Ok(Action::Execute),
+        "Write" => Ok(Action::Write),
+        "Manage" => Ok(Action::Manage),
+        _ => Err(format!("unknown action {value}")),
+    }
+}
+
+fn parse_resource(value: &str) -> Result<Resource, String> {
+    match value {
+        "Telemetry" => Ok(Resource::Telemetry),
+        "ControlCommand" => Ok(Resource::ControlCommand),
+        "FileTransfer" => Ok(Resource::FileTransfer),
+        "Configuration" => Ok(Resource::Configuration),
+        "Upgrade" => Ok(Resource::Upgrade),
+        "AppControl" => Ok(Resource::AppControl),
+        "SecurityPolicy" => Ok(Resource::SecurityPolicy),
+        _ => Err(format!("unknown resource {value}")),
+    }
+}
+
+fn to_sql_conversion_error(error: String) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_core::security::{Action, Resource};
+    use std::time::{Duration, SystemTime};
 
     #[test]
     fn migrates_empty_database() {
@@ -364,5 +686,122 @@ mod tests {
 
         let chain = store.load_audit_chain().unwrap();
         assert!(!chain.verify());
+    }
+
+    #[test]
+    fn stores_security_key_metadata_and_rbac_policy() {
+        let store = StateStore::open_in_memory().unwrap();
+
+        store
+            .upsert_security_key(&SecurityKeyRecord {
+                name: "audit-root".to_string(),
+                purpose: "audit-chain".to_string(),
+                provider: "pal-key-store".to_string(),
+                reference: "audit-root".to_string(),
+                security_level: "file-backed".to_string(),
+            })
+            .unwrap();
+        store
+            .upsert_rbac_policy(&RbacPolicyRecord {
+                role: "operator".to_string(),
+                resource: Resource::ControlCommand,
+                action: Action::Execute,
+                allowed: true,
+            })
+            .unwrap();
+
+        assert_eq!(
+            store
+                .load_security_key("audit-root")
+                .unwrap()
+                .unwrap()
+                .purpose,
+            "audit-chain"
+        );
+        assert_eq!(store.load_rbac_policies().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn replay_nonce_persistence_rejects_duplicates_and_prunes_expired() {
+        let store = StateStore::open_in_memory().unwrap();
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let old = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+
+        assert!(
+            store
+                .try_insert_replay_nonce(
+                    "tenant-a",
+                    "device-1",
+                    "operator",
+                    Action::Execute,
+                    "n1",
+                    now
+                )
+                .unwrap()
+        );
+        assert!(
+            !store
+                .try_insert_replay_nonce(
+                    "tenant-a",
+                    "device-1",
+                    "operator",
+                    Action::Execute,
+                    "n1",
+                    now
+                )
+                .unwrap()
+        );
+        store
+            .try_insert_replay_nonce("tenant-a", "device-1", "operator", Action::Read, "old", old)
+            .unwrap();
+        assert_eq!(
+            store
+                .prune_replay_nonces(now - Duration::from_secs(300))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn stores_file_transfer_task_and_queries_audit_events() {
+        use agent_core::security::{AuditEvent, Principal, Role};
+
+        let store = StateStore::open_in_memory().unwrap();
+        store
+            .upsert_file_transfer_task(&FileTransferTaskRecord {
+                task_id: "upload-1".to_string(),
+                file_name: "uploads/app.bin".to_string(),
+                direction: "upload".to_string(),
+                state: "completed".to_string(),
+                offset: 128,
+                file_sha256: Some("abc".to_string()),
+            })
+            .unwrap();
+        let principal = Principal::new("tenant-a", "device-1", "operator-user", Role::Operator);
+        store
+            .append_audit_event(AuditEvent::new(
+                "event-1",
+                SystemTime::UNIX_EPOCH + Duration::from_secs(1_000),
+                principal,
+                Action::Execute,
+                Resource::ControlCommand,
+                "process:nginx",
+                "success",
+                "trace-1",
+            ))
+            .unwrap();
+
+        let tasks = store.load_file_transfer_tasks().unwrap();
+        assert_eq!(tasks[0].offset, 128);
+
+        let events = store
+            .query_audit_events(&AuditEventFilter {
+                principal: Some("operator-user".to_string()),
+                action: Some(Action::Execute),
+                result: Some("success".to_string()),
+                ..AuditEventFilter::default()
+            })
+            .unwrap();
+        assert_eq!(events.len(), 1);
     }
 }
