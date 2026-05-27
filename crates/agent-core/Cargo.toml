@@ -13,6 +13,7 @@ thiserror.workspace = true
 tokio = { workspace = true }
 tonic = { workspace = true }
 tower = "0.5"
+tracing.workspace = true
 hyper = { version = "1", features = [] }
 http = "1"
 x509-parser = "0.17"
