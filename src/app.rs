@@ -178,6 +178,57 @@ pub async fn run(
         });
     }
 
+    // Build the security middleware chain
+    use agent_core::chain::{
+        AuditWriter, IdentityExtractor, ResourceMapper, SecurityInterceptorLayer,
+    };
+    use agent_core::security::{BasicSecurityCenter, RbacPolicy, ReplayGuard};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    struct StoreAuditSink {
+        store: Mutex<agent_store::StateStore>,
+    }
+    impl agent_core::chain::AuditSink for StoreAuditSink {
+        fn append_audit_event(
+            &self,
+            event: agent_core::security::AuditEvent,
+        ) -> Result<(), String> {
+            self.store
+                .lock()
+                .map_err(|e| e.to_string())?
+                .append_audit_event(event)
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    // Open StateStore for audit persistence next to the service binary.
+    let store_path = state
+        .service_path()
+        .parent()
+        .map(|p| p.join("state.db"))
+        .unwrap_or_else(|| std::path::PathBuf::from("state.db"));
+    let state_store = Mutex::new(
+        agent_store::StateStore::open(&store_path)
+            .map_err(|e| anyhow::anyhow!("open state store at {}: {e}", store_path.display()))?,
+    );
+    let audit_sink: Arc<dyn agent_core::chain::AuditSink> =
+        Arc::new(StoreAuditSink { store: state_store });
+    let audit_writer = AuditWriter::new(audit_sink);
+    let security_center = Arc::new(Mutex::new(BasicSecurityCenter::new(
+        RbacPolicy::default(),
+        ReplayGuard::new(Duration::from_secs(300)),
+    )));
+    let identity_extractor = IdentityExtractor::new(state.station_id().to_string());
+    let resource_mapper = ResourceMapper;
+    let security_layer = SecurityInterceptorLayer::new(
+        Arc::clone(&security_center),
+        audit_writer,
+        identity_extractor,
+        resource_mapper,
+        state.station_id().to_string(),
+    );
+
     let mut server = Server::builder();
     if control_tls.enabled {
         server = server
@@ -186,6 +237,7 @@ pub async fn run(
     }
 
     server
+        .layer(security_layer)
         .add_service(StationControlServer::new(StationControlService {
             state: Arc::clone(&state),
         }))
@@ -527,13 +579,71 @@ impl StationControl for StationControlService {
         &self,
         request: Request<ExecuteCommandRequest>,
     ) -> Result<Response<ExecuteCommandResponse>, Status> {
-        let _req = request.into_inner();
-        Ok(Response::new(ExecuteCommandResponse {
-            exit_code: -1,
-            stdout: String::new(),
-            stderr: "raw shell command execution is disabled until command policy is available"
-                .to_string(),
-        }))
+        use agent_core::command_policy::CommandPolicy;
+
+        // Extract context before consuming request
+        let sec = request
+            .extensions()
+            .get::<agent_core::chain::SecurityContext>()
+            .ok_or_else(|| Status::internal("security context missing"))?
+            .clone();
+
+        let req = request.into_inner();
+
+        // Parse the command string as JSON {command_id, params}, or treat
+        // the raw string as a process_name for "restart_process".
+        let (command_id, params): (String, serde_json::Value) =
+            match serde_json::from_str::<serde_json::Value>(&req.command) {
+                Ok(obj) if obj.is_object() => (
+                    obj.get("command_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("restart_process")
+                        .to_string(),
+                    obj.get("params").cloned().unwrap_or(serde_json::json!({})),
+                ),
+                _ => (
+                    "restart_process".to_string(),
+                    serde_json::json!({"process_name": req.command}),
+                ),
+            };
+
+        let policy = CommandPolicy::default();
+        let validated = policy
+            .validate(&sec.principal, &command_id, &params)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        match validated.command_id.as_str() {
+            "restart_process" => {
+                let process_name = validated
+                    .argument("process_name")
+                    .ok_or_else(|| Status::invalid_argument("process_name required"))?;
+                let pids = crate::state::find_process_ids_by_name(process_name);
+                if pids.is_empty() {
+                    return Ok(Response::new(ExecuteCommandResponse {
+                        exit_code: 1,
+                        stdout: String::new(),
+                        stderr: format!("process '{process_name}' not found"),
+                    }));
+                }
+                let mut exit_code = 0;
+                for pid in &pids {
+                    if let Err(e) = crate::state::terminate_process(*pid) {
+                        exit_code = 1;
+                        tracing::warn!(pid, error = %e, "failed to terminate process");
+                    }
+                }
+                Ok(Response::new(ExecuteCommandResponse {
+                    exit_code,
+                    stdout: format!("terminated {} pids for '{process_name}'", pids.len()),
+                    stderr: String::new(),
+                }))
+            }
+            other => Ok(Response::new(ExecuteCommandResponse {
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("command '{other}' is registered but has no runtime handler"),
+            })),
+        }
     }
 }
 

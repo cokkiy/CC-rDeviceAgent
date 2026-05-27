@@ -86,9 +86,7 @@ impl ResourceMapper {
             | ("/cc.grpc.v1.StationControl", "RenameFile") => {
                 Some((Resource::FileTransfer, Action::Write))
             }
-            ("/cc.grpc.v1.FileTransfer", "Upload") => {
-                Some((Resource::FileTransfer, Action::Write))
-            }
+            ("/cc.grpc.v1.FileTransfer", "Upload") => Some((Resource::FileTransfer, Action::Write)),
             ("/cc.grpc.v1.FileTransfer", "Download") => {
                 Some((Resource::FileTransfer, Action::Read))
             }
@@ -127,10 +125,10 @@ impl IdentityExtractor {
         headers: &http::HeaderMap,
     ) -> (crate::security::Principal, crate::security::AuthMethod) {
         // Try mTLS certificate first
-        if let Some(certs) = peer_certs {
-            if let Some(principal) = self.try_extract_from_certs(certs) {
-                return (principal, crate::security::AuthMethod::Mtls);
-            }
+        if let Some(certs) = peer_certs
+            && let Some(principal) = self.try_extract_from_certs(certs)
+        {
+            return (principal, crate::security::AuthMethod::Mtls);
         }
 
         // Fall back to metadata header
@@ -173,9 +171,7 @@ impl IdentityExtractor {
                     .general_names
                     .iter()
                     .filter_map(|name| match name {
-                        x509_parser::extensions::GeneralName::DNSName(dns) => {
-                            Some(dns.to_string())
-                        }
+                        x509_parser::extensions::GeneralName::DNSName(dns) => Some(dns.to_string()),
                         _ => None,
                     })
                     .collect()
@@ -223,10 +219,10 @@ impl IdentityExtractor {
     fn infer_tenant(&self, dns_names: &[String]) -> String {
         for name in dns_names {
             // Pattern: <prefix>.tenant-<tenant>.<suffix>
-            if let Some(rest) = name.strip_prefix("tenant-") {
-                if let Some(tenant) = rest.split('.').next() {
-                    return tenant.to_string();
-                }
+            if let Some(rest) = name.strip_prefix("tenant-")
+                && let Some(tenant) = rest.split('.').next()
+            {
+                return tenant.to_string();
             }
         }
         self.default_tenant.clone()
@@ -346,18 +342,18 @@ pub struct SecurityInterceptor<S> {
     station_id: String,
 }
 
-impl<S> tower::Service<hyper::Request<hyper::body::Incoming>> for SecurityInterceptor<S>
+impl<S> tower::Service<http::Request<tonic::body::Body>> for SecurityInterceptor<S>
 where
     S: tower::Service<
-            hyper::Request<hyper::body::Incoming>,
-            Response = tonic::Response<tonic::body::Body>,
+            http::Request<tonic::body::Body>,
+            Response = http::Response<tonic::body::Body>,
         > + Clone
         + Send
         + 'static,
     S::Future: Send + 'static,
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-    type Response = tonic::Response<tonic::body::Body>;
+    type Response = http::Response<tonic::body::Body>;
     type Error = Box<dyn std::error::Error + Send + Sync>;
     type Future =
         Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
@@ -366,7 +362,7 @@ where
         self.inner.poll_ready(cx).map_err(Into::into)
     }
 
-    fn call(&mut self, mut request: hyper::Request<hyper::body::Incoming>) -> Self::Future {
+    fn call(&mut self, mut request: http::Request<tonic::body::Body>) -> Self::Future {
         let mut inner = self.inner.clone();
         let security_center = Arc::clone(&self.security_center);
         let audit_writer = self.audit_writer.clone();
@@ -451,10 +447,10 @@ where
                             &trace_id,
                         );
                         let _ = audit_writer.write_entry(err_event);
-                        return Err(
-                            Status::invalid_argument(format!("security check failed: {err}"))
-                                .into(),
-                        );
+                        return Err(Status::invalid_argument(format!(
+                            "security check failed: {err}"
+                        ))
+                        .into());
                     }
                     Ok(Decision::Allow) => { /* proceed */ }
                 }
@@ -529,7 +525,7 @@ mod tests {
 
     #[test]
     fn mapper_covers_all_station_control_methods() {
-        let mapper = ResourceMapper::default();
+        let mapper = ResourceMapper;
         assert_eq!(
             mapper.map("/cc.grpc.v1.StationControl/StartApp"),
             Some((Resource::AppControl, Action::Execute))
@@ -558,7 +554,7 @@ mod tests {
 
     #[test]
     fn mapper_returns_none_for_unknown_method() {
-        let mapper = ResourceMapper::default();
+        let mapper = ResourceMapper;
         assert_eq!(mapper.map("/cc.grpc.v1.Unknown/DoSomething"), None);
     }
 
@@ -643,7 +639,9 @@ mod tests {
         });
         let writer = AuditWriter::new(Arc::clone(&sink) as Arc<dyn AuditSink>);
         let event = test_audit_event("entry-1");
-        let persisted = writer.write_entry(event).expect("entry write should succeed");
+        let persisted = writer
+            .write_entry(event)
+            .expect("entry write should succeed");
         assert!(!persisted.hash.is_empty());
         assert_eq!(sink.events.lock().unwrap().len(), 1);
     }
