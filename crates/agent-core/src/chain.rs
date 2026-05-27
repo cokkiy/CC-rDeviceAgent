@@ -517,3 +517,148 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::security::{Action, Principal, Resource, Role};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, SystemTime};
+
+    // ---- ResourceMapper tests ----
+
+    #[test]
+    fn mapper_covers_all_station_control_methods() {
+        let mapper = ResourceMapper::default();
+        assert_eq!(
+            mapper.map("/cc.grpc.v1.StationControl/StartApp"),
+            Some((Resource::AppControl, Action::Execute))
+        );
+        assert_eq!(
+            mapper.map("/cc.grpc.v1.StationControl/Reboot"),
+            Some((Resource::ControlCommand, Action::Execute))
+        );
+        assert_eq!(
+            mapper.map("/cc.grpc.v1.StationControl/GetSystemState"),
+            Some((Resource::Telemetry, Action::Read))
+        );
+        assert_eq!(
+            mapper.map("/cc.grpc.v1.StationControl/SetWatchingApp"),
+            Some((Resource::Configuration, Action::Write))
+        );
+        assert_eq!(
+            mapper.map("/cc.grpc.v1.FileTransfer/Upload"),
+            Some((Resource::FileTransfer, Action::Write))
+        );
+        assert_eq!(
+            mapper.map("/cc.grpc.v1.FileTransfer/Download"),
+            Some((Resource::FileTransfer, Action::Read))
+        );
+    }
+
+    #[test]
+    fn mapper_returns_none_for_unknown_method() {
+        let mapper = ResourceMapper::default();
+        assert_eq!(mapper.map("/cc.grpc.v1.Unknown/DoSomething"), None);
+    }
+
+    // ---- IdentityExtractor tests ----
+
+    #[test]
+    fn extractor_returns_anonymous_with_no_cert_and_no_header() {
+        let extractor = IdentityExtractor::new("default-tenant");
+        let headers = http::HeaderMap::new();
+        let (principal, auth_method) = extractor.extract(None, &headers);
+        assert_eq!(auth_method, AuthMethod::Anonymous);
+        assert_eq!(principal.tenant_id, "default-tenant");
+    }
+
+    #[test]
+    fn extractor_parses_metadata_header() {
+        let extractor = IdentityExtractor::new("default-tenant");
+        let mut headers = http::HeaderMap::new();
+        let header_value = serde_json::json!({
+            "tenant_id": "tenant-x",
+            "device_id": "device-1",
+            "subject": "admin-user",
+            "role": "admin"
+        })
+        .to_string();
+        headers.insert("x-cc-principal", header_value.parse().unwrap());
+        let (principal, auth_method) = extractor.extract(None, &headers);
+        assert_eq!(auth_method, AuthMethod::SessionToken);
+        assert_eq!(principal.tenant_id, "tenant-x");
+        assert_eq!(principal.device_id, "device-1");
+        assert_eq!(principal.role, Role::Admin);
+    }
+
+    #[test]
+    fn extractor_defaults_role_to_operator_for_header_without_role() {
+        let extractor = IdentityExtractor::new("default-tenant");
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            "x-cc-principal",
+            r#"{"tenant_id":"t1","device_id":"d1","subject":"u1"}"#
+                .parse()
+                .unwrap(),
+        );
+        let (principal, _) = extractor.extract(None, &headers);
+        assert_eq!(principal.role, Role::Operator);
+    }
+
+    // ---- AuditWriter tests ----
+
+    struct TestAuditSink {
+        events: Mutex<Vec<AuditEvent>>,
+    }
+
+    impl AuditSink for TestAuditSink {
+        fn append_audit_event(&self, event: AuditEvent) -> Result<(), String> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
+
+    fn test_principal() -> Principal {
+        Principal::new("tenant-a", "device-1", "test-user", Role::Operator)
+    }
+
+    fn test_audit_event(id: &str) -> AuditEvent {
+        AuditEvent::new(
+            id,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1000),
+            test_principal(),
+            Action::Execute,
+            Resource::ControlCommand,
+            "test:target",
+            "success",
+            "trace-1",
+        )
+    }
+
+    #[tokio::test]
+    async fn audit_writer_entry_is_synchronous() {
+        let sink = Arc::new(TestAuditSink {
+            events: Mutex::new(Vec::new()),
+        });
+        let writer = AuditWriter::new(Arc::clone(&sink) as Arc<dyn AuditSink>);
+        let event = test_audit_event("entry-1");
+        let persisted = writer.write_entry(event).expect("entry write should succeed");
+        assert!(!persisted.hash.is_empty());
+        assert_eq!(sink.events.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn audit_writer_exit_is_async() {
+        let sink = Arc::new(TestAuditSink {
+            events: Mutex::new(Vec::new()),
+        });
+        let writer = AuditWriter::new(Arc::clone(&sink) as Arc<dyn AuditSink>);
+        let event = test_audit_event("exit-1");
+        writer.write_exit(event);
+
+        // Give the background task a moment to drain the channel
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(sink.events.lock().unwrap().len(), 1);
+    }
+}
