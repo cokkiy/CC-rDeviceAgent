@@ -1,6 +1,6 @@
 # CC-rDeviceAgent
 
-Rust device-side agent for managed workstations, edge devices, and IoT stations.
+Rust device-side agent for managed workstations, edge devices, and IoT devices.
 
 CC-rDeviceAgent adopts a **dual-sided, three-layer** architecture — facing the management backend northbound and payload applications southbound. The three layers are: Protocol Layer, Core Services Layer, and Platform Abstraction Layer (PAL). The goal is a **lightweight, secure, cross-platform** device agent that provides both device management capabilities (L1) and application platform capabilities (L2).
 
@@ -61,7 +61,7 @@ See [`doc/architecture-zh.md`](doc/architecture-zh.md) for detailed architecture
 
 The main service exposes two protobuf services:
 
-- **`StationControl`**
+- **`DeviceControl`**
   - start, stop, and restart processes
   - reboot or shut down the host
   - return system state, process lists, network interfaces, TCP/UDP listeners, and version info
@@ -92,10 +92,10 @@ capture the desktop directly.
 
 When `mqtt.enabled = true`, the service can:
 
-- publish station status to `cc/<station_id>/status`
-- publish telemetry bundles to `cc/<station_id>/telemetry`
-- subscribe to `cc/<station_id>/command`
-- publish command acknowledgements to `cc/<station_id>/command/ack`
+- publish device status to `cc/<device_id>/status`
+- publish telemetry bundles to `cc/<device_id>/telemetry`
+- subscribe to `cc/<device_id>/command`
+- publish command acknowledgements to `cc/<device_id>/command/ack`
 
 The currently implemented MQTT command handler supports `restart_process` with a
 `process_name` parameter.
@@ -235,12 +235,12 @@ See [`doc/OTA-statemachine-detail-design-zh.md`](doc/OTA-statemachine-detail-des
 ## Configuration
 
 By default, the service loads `CC-rDeviceAgent.toml` from the executable directory.
-If `service.station_id` is blank, the service resolves it to `<hostname>-<uuid>`.
+If `service.device_id` is blank, the service resolves it to `<hostname>-<uuid>`.
 
 ```toml
 [service]
 service_name = "CC-rDeviceAgent"
-station_id = "station-01"
+device_id = "device-01"
 state_interval_seconds = 5
 watched_processes = []
 udp_display_target = "127.0.0.1:9008"
@@ -318,7 +318,7 @@ For local debugging, you can mirror runtime telemetry to stdout:
 
 The crate also contains library modules for scripts, tags, groups, batch execution,
 alerts, and plugin abstractions. Those modules are present in the source tree, but
-the current service entry point is centered on gRPC station control,
+the current service entry point is centered on gRPC device control,
 file transfer, telemetry collection, MQTT publishing, and desktop capture proxying.
 
 ### Crate structure (planned)
@@ -366,7 +366,7 @@ cd ../CC
 ```
 
 The launcher builds a minimal runtime image for `cc-rdeviceagent`, starts a Mosquitto
-broker, and launches headless stations such as `iot-001`, `iot-002`, and `iot-003`.
+broker, and launches headless devices such as `iot-001`, `iot-002`, and `iot-003`.
 
 Useful commands:
 

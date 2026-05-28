@@ -100,11 +100,11 @@ Phase 1 security baseline implementation is **complete** and **integrated** into
 
 **1. ResourceMapper**
 - Maps gRPC method paths to (Resource, Action) pairs
-- Covers all StationControl and FileTransfer methods
+- Covers all DeviceControl and FileTransfer methods
 - Examples:
-  - `/cc.grpc.v1.StationControl/StartApp` → (AppControl, Execute)
-  - `/cc.grpc.v1.StationControl/Reboot` → (ControlCommand, Execute)
-  - `/cc.grpc.v1.StationControl/GetSystemState` → (Telemetry, Read)
+  - `/cc.grpc.v1.DeviceControl/StartApp` → (AppControl, Execute)
+  - `/cc.grpc.v1.DeviceControl/Reboot` → (ControlCommand, Execute)
+  - `/cc.grpc.v1.DeviceControl/GetSystemState` → (Telemetry, Read)
   - `/cc.grpc.v1.FileTransfer/Upload` → (FileTransfer, Write)
 
 **2. IdentityExtractor**
@@ -232,7 +232,7 @@ Phase 1 security baseline implementation is **complete** and **integrated** into
 2. **Security Components**
    - `BasicSecurityCenter` with default RbacPolicy and 300s ReplayGuard
    - `AuditWriter` with StateStore sink
-   - `IdentityExtractor` with station_id as default tenant
+   - `IdentityExtractor` with device_id as default tenant
    - `ResourceMapper` for gRPC method mapping
 
 3. **Middleware Layer**
@@ -309,7 +309,7 @@ require_client_auth = true  # Enforce mTLS
 - **RBAC Policy:** Default matrix (Admin/Operator/Readonly)
 - **Replay Window:** 300 seconds
 - **Audit Persistence:** SQLite at `<service_dir>/state.db`
-- **Default Tenant:** station_id from config
+- **Default Tenant:** device_id from config
 - **Anonymous Role:** Readonly (denied by default RBAC)
 
 ---
@@ -380,13 +380,13 @@ cargo run -- --config config.toml
 grpcurl -cert client-cert.pem -key client-key.pem \
   -cacert server-ca.pem \
   -d '{}' \
-  localhost:50051 cc.grpc.v1.StationControl/GetSystemState
+  localhost:50051 cc.grpc.v1.DeviceControl/GetSystemState
 
 # Expected: Success response with audit entry in state.db
 
 # Test with invalid cert
 grpcurl -insecure -d '{}' \
-  localhost:50051 cc.grpc.v1.StationControl/GetSystemState
+  localhost:50051 cc.grpc.v1.DeviceControl/GetSystemState
 
 # Expected: TLS handshake failure or PermissionDenied
 ```
