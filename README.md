@@ -68,25 +68,11 @@ The main service exposes two protobuf services:
   - execute shell commands with a timeout
   - update watched process names and the in-memory state gathering interval
   - return the telemetry schema and replace MQTT telemetry profiles at runtime
-  - proxy `CaptureScreen` requests to the desktop agent
 - **`FileTransfer`**
   - upload files as streamed chunks
   - download files as streamed chunks
 
 The service listens on `control.listen_addr`, which is `0.0.0.0:50051` in the sample config.
-
-### Desktop capture helper
-
-The desktop capture path is implemented in the desktop agent gRPC service:
-
-- binds only to loopback using `agent.listen_addr`
-- requires the `x-cc-agent-token` header to match `agent.auth_token`
-- captures the configured display index and streams PNG chunks back to the service
-- caches the latest capture so interrupted downloads can resume by byte offset
-- on Linux, retries via `grim` when the primary screenshot path fails
-
-`CaptureScreen` on the main service is only a proxy. The privileged service does not
-capture the desktop directly.
 
 ### MQTT behavior
 

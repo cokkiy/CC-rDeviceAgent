@@ -42,7 +42,6 @@ pub struct AppState {
     device_id: String,
     service_path: PathBuf,
     udp_target: SocketAddr,
-    agent_target: SocketAddr,
     watched_processes: RwLock<Vec<String>>,
     interval_seconds: AtomicU64,
     network_sampler: Mutex<NetworkSampler>,
@@ -61,11 +60,6 @@ impl AppState {
             .udp_display_target
             .parse::<SocketAddr>()
             .with_context(|| format!("parse UDP target {}", config.service.udp_display_target))?;
-        let agent_target = config
-            .agent
-            .listen_addr
-            .parse::<SocketAddr>()
-            .with_context(|| format!("parse agent target {}", config.agent.listen_addr))?;
 
         // Initialize MQTT client if enabled
         let mqtt_client = if config.mqtt.enabled {
@@ -120,7 +114,6 @@ impl AppState {
             device_id,
             service_path,
             udp_target,
-            agent_target,
             mqtt_client,
             telemetry_profiles: RwLock::new(telemetry_profiles),
             telemetry_profiles_version: AtomicU64::new(telemetry_profiles_version),
@@ -162,10 +155,6 @@ impl AppState {
         self.udp_target
     }
 
-    pub fn agent_target(&self) -> SocketAddr {
-        self.agent_target
-    }
-
     pub fn service_path(&self) -> &Path {
         &self.service_path
     }
@@ -180,14 +169,6 @@ impl AppState {
 
     pub fn min_file_transfer_free_bytes(&self) -> u64 {
         self.config.service.file_transfer.min_free_bytes
-    }
-
-    pub fn agent_auth_token(&self) -> &str {
-        &self.config.agent.auth_token
-    }
-
-    pub fn preferred_display_index(&self) -> u32 {
-        self.config.agent.preferred_display_index
     }
 
     pub fn telemetry_profiles(&self) -> Vec<TelemetryProfileConfig> {

@@ -9,11 +9,6 @@ launcher_proxy_path = ""
 [control]
 listen_addr = "0.0.0.0:50051"
 
-[agent]
-listen_addr = "127.0.0.1:50052"
-auth_token = "local-change-me"
-preferred_display_index = 0
-
 [mqtt]
 enabled = true
 broker_host = "localhost"

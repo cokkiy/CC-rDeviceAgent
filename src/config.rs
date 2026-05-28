@@ -11,7 +11,6 @@ use crate::telemetry::{TelemetryProfileConfig, validate_profiles};
 pub struct AppConfig {
     pub service: ServiceConfig,
     pub control: ControlConfig,
-    pub agent: AgentConfig,
     pub mqtt: MqttConfig,
 }
 
@@ -40,14 +39,6 @@ pub struct FileTransferConfig {
 pub struct ControlConfig {
     pub listen_addr: String,
     pub tls: TlsConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct AgentConfig {
-    pub listen_addr: String,
-    pub auth_token: String,
-    pub preferred_display_index: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -100,16 +91,6 @@ impl Default for ControlConfig {
         Self {
             listen_addr: "0.0.0.0:50051".to_string(),
             tls: TlsConfig::default(),
-        }
-    }
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            listen_addr: "127.0.0.1:50052".to_string(),
-            auth_token: "local-change-me".to_string(),
-            preferred_display_index: 0,
         }
     }
 }

@@ -11,13 +11,11 @@ use ring::digest;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::watch;
-use tonic::metadata::MetadataValue;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
 use crate::config::AppConfig;
-use crate::grpc::agent::desktop_agent_client::DesktopAgentClient;
 use crate::grpc::cc::{
     AppControlResult, AppStartParameter, AppStartingResult, CaptureScreenChunk,
     CaptureScreenRequest, CloseAppRequest, CloseAppResponse, DownloadChunk, DownloadRequest, Empty,
@@ -46,12 +44,6 @@ pub async fn run(
     let service_path = std::env::current_exe().context("resolve current executable")?;
     let state = Arc::new(AppState::new(config, resolved_config_path, service_path)?);
     let listen_addr = state.listen_addr()?;
-    if !state.agent_target().ip().is_loopback() {
-        anyhow::bail!(
-            "desktop agent target must stay on loopback, got {}",
-            state.agent_target()
-        );
-    }
 
     info!(
         device_id = state.device_id(),
@@ -430,42 +422,12 @@ impl DeviceControl for DeviceControlService {
 
     async fn capture_screen(
         &self,
-        request: Request<CaptureScreenRequest>,
+        _request: Request<CaptureScreenRequest>,
     ) -> Result<Response<Self::CaptureScreenStream>, Status> {
-        let start_position = request.into_inner().start_position;
-        let endpoint = format!("http://{}", self.state.agent_target());
-        let auth_token = self.state.agent_auth_token().to_string();
-        let display_index = self.state.preferred_display_index() as i32;
-
-        let output = try_stream! {
-            let mut client = DesktopAgentClient::connect(endpoint.clone())
-                .await
-                .map_err(|error| Status::unavailable(format!("connect desktop agent at {endpoint}: {error}")))?;
-            let mut request = Request::new(crate::grpc::agent::CaptureRequest {
-                start_position,
-                display_index,
-                force_refresh: start_position == 0,
-            });
-            let token_metadata = MetadataValue::try_from(auth_token.as_str())
-                .map_err(|_| Status::internal("invalid desktop agent auth token"))?;
-            request.metadata_mut().insert("x-cc-agent-token", token_metadata);
-            let response = client
-                .capture_screen(request)
-                .await
-                .map_err(|error| Status::unavailable(format!("capture screen via desktop agent: {error}")))?;
-            let mut stream = response.into_inner();
-
-            while let Some(chunk) = stream.message().await? {
-                yield CaptureScreenChunk {
-                    position: chunk.position,
-                    length: chunk.length,
-                    data: chunk.data,
-                    completed: chunk.completed,
-                };
-            }
-        };
-
-        Ok(Response::new(Box::pin(output)))
+        Err(Status::unimplemented(
+            "Screen capture has been moved to a standalone application. \
+             This feature will be available as a payload app in Phase 2."
+        ))
     }
 
     async fn get_file_info(
