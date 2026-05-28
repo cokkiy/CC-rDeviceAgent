@@ -19,7 +19,8 @@ pub struct AppConfig {
 #[serde(default)]
 pub struct ServiceConfig {
     pub service_name: String,
-    pub station_id: String,
+    #[serde(alias = "station_id")]
+    pub device_id: String,
     pub state_interval_seconds: u64,
     pub watched_processes: Vec<String>,
     pub udp_display_target: String,
@@ -75,7 +76,7 @@ impl Default for ServiceConfig {
     fn default() -> Self {
         Self {
             service_name: "CC-rDeviceAgent".to_string(),
-            station_id: String::new(),
+            device_id: String::new(),
             state_interval_seconds: 5,
             watched_processes: Vec::new(),
             udp_display_target: "127.0.0.1:9008".to_string(),
@@ -164,16 +165,16 @@ impl AppConfig {
         std::fs::write(path, content).with_context(|| format!("write config {}", path.display()))
     }
 
-    pub fn resolved_station_id(&self) -> String {
-        if !self.service.station_id.trim().is_empty() {
-            return self.service.station_id.trim().to_string();
+    pub fn resolved_device_id(&self) -> String {
+        if !self.service.device_id.trim().is_empty() {
+            return self.service.device_id.trim().to_string();
         }
 
         let host = hostname::get()
             .ok()
             .and_then(|value| value.into_string().ok())
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "station".to_string());
+            .unwrap_or_else(|| "device".to_string());
 
         format!("{host}-{}", Uuid::new_v4())
     }

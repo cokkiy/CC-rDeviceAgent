@@ -1,6 +1,6 @@
 [service]
 service_name = "CC-rDeviceAgent"
-station_id = "__STATION_ID__"
+device_id = "__DEVICE_ID__"
 state_interval_seconds = __STATE_INTERVAL_SECONDS__
 watched_processes = []
 udp_display_target = "127.0.0.1:9008"
