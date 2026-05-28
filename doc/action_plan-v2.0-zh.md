@@ -264,10 +264,28 @@
 
 ### 4.2 工作项
 
-> **实现状态更新（2026-05-26）**：
+> **实现状态更新（2026-05-28）**：
 > - `[x]`：已完成并有测试覆盖
 > - `[~]`：已部分完成，仍有明确缺口
 > - `[ ]`：未完成，需后续实施
+>
+> 自 2026-05-26 起的增量：完成责任链中间件骨架（`agent-core::chain`），将 `SecurityInterceptorLayer` 接入北向 gRPC server；新增 `IdentityExtractor`（X.509 SAN/CN 解析）、`ResourceMapper`、`AuditWriter`（同步入口 + 异步出口）、`SecurityContext` 注入；gRPC 服务通过 `tower::Layer` 在所有方法上强制执行 AuthN → AuthZ → AuditEntry → Handler → AuditExit 流程。
+
+#### Phase 1 阶段完成度概览（2026-05-28）
+
+| 工作包                          | 完成度 | 关键缺口                                                            |
+| ------------------------------- | ------ | ------------------------------------------------------------------- |
+| W1.1 Security Center 核心       | ~85%   | TrustAnchor 热加载、`credential://` 引用收口                        |
+| W1.2 mTLS 全通道与防重放        | ~70%   | 证书热轮换、MQTT broker 集成测试、南向 IPC RBAC 收口                |
+| W1.3 KeyStore 高级功能与签名    | ~75%   | KeyStore 主路径/降级路径测试、TLS 材料统一走 CredentialStore        |
+| W1.4 命令白名单 / RBAC / 责任链 | ~75%   | RateLimit、MQTT 入口收口、策略外部配置加载、PAL ProcessManager 集成 |
+| W1.5 Sandbox 与资源限制         | 0%     | 整体未启动（PAL Sandbox / ResourceLimiter 集成、命令 profile）      |
+| W1.6 Audit Chain                | ~80%   | 异步批量化 + bounded channel、写失败告警、CLI 校验工具              |
+| W1.7 文件传输安全               | ~60%   | 分块校验/CRC32、断点续传持久化、限速、handler 内细粒度审计          |
+| W1.8 三平台安全 PAL 补齐        | 0%     | Windows DPAPI / Job Object、macOS Keychain、Linux fallback 测试     |
+| W1.9 安全测试与供应链检查       | ~55%   | mTLS 端到端测试、admin 全 RBAC 矩阵、symlink 测试、Fuzz             |
+
+**整体评估**：Phase 1 主体安全契约（Security Center、责任链、Audit Chain、命令白名单、mTLS、文件路径安全）已覆盖；**阻塞 v0.8 发布**的主要项是 W1.5 Sandbox/ResourceLimiter、W1.8 三平台 PAL、以及 W1.9 端到端 mTLS / RBAC 集成测试。建议把 W1.5、W1.8 拆为独立 Sprint，并把 W1.6 的批量化 + 写失败告警与 W1.7 的 handler 审计在同一个 Sprint 内完成以收口审计闭环。
 
 #### W1.1 Security Center 核心与安全模型（5 天）【调整】
 
@@ -279,10 +297,8 @@
   - 下一步：为 TLS 材料增加 PAL CredentialStore resolver，并逐步禁止业务模块直接读敏感密钥文件。
 - [x] 定义 `Principal`、`DeviceIdentity`、`Role`、`Permission`、`Decision`、`RequestContext` 安全模型
   - 已完成：`Principal`、`Role`、`Resource`/`Action`（作为 Permission 最小表达）、`Decision`、`RequestContext`、`DeviceIdentityBinding` 已实现并测试。
-- [~] 证书加载与验证（rustls + webpki），X.509 CN/SAN 必须可绑定 `device_id`
-  - 已完成：gRPC mTLS 与 MQTT TLS 均可加载 CA/cert/key；安全模型提供 `DeviceIdentityBinding::matches_device_id`。
-  - 未完成原因：尚未解析真实 X.509 SAN/CN 并把 peer certificate 自动映射成 `DeviceIdentityBinding`。
-  - 下一步：新增 X.509 parser，把 SAN/CN 提取接入 tonic/rustls peer cert 校验路径。
+- [x] 证书加载与验证（rustls + webpki），X.509 CN/SAN 必须可绑定 `device_id`
+  - 已完成：gRPC mTLS 与 MQTT TLS 均可加载 CA/cert/key；安全模型提供 `DeviceIdentityBinding::matches_device_id`；`IdentityExtractor` 通过 `x509-parser` 解析 peer cert 的 SAN dNSName 与 CN，自动映射为 `DeviceIdentityBinding`，并由责任链注入到 `SecurityContext`。
 - [~] 信任锚管理：Root CA 公钥来自只读配置或平台安全存储，支持热加载但不负责 CA 签发
   - 已完成：`control.tls` / `mqtt.tls` 均支持 CA、证书、私钥路径校验与加载。
   - 未完成原因：热加载和平台安全存储引用尚未完成。
@@ -312,8 +328,8 @@
   - 未完成原因：南向 IPC RBAC 未统一接入 Security Center，Named Pipe ACL/UDS 权限测试未补齐。
   - 下一步：为南向请求构造 `RequestContext`，接入 RBAC，并补平台权限测试。
 - [~] **交付物**：北向 mTLS 全通道 + 防重放机制 + 南向 IPC 安全边界说明
-  - 已完成：MQTT TLS 配置接入、防重放核心、gRPC fail-closed。
-  - 未完成原因：gRPC mTLS、证书轮换、持久化 nonce 仍缺。
+  - 已完成：gRPC mTLS（`ServerTlsConfig` + `require_client_auth`）、MQTT TLS 配置接入、防重放核心、责任链 fail-closed。
+  - 未完成原因：MQTT broker 集成测试、证书热加载/轮换、持久化 nonce 仍缺。
 
 #### W1.3 KeyStore 高级功能与签名封装（4 天）【新增】
 
@@ -341,20 +357,20 @@
 - [x] 参数必须通过 schema 校验后进入模板，不允许拼接任意 shell 字符串
   - 已完成：`restart_process` 必须提供非空字符串 `process_name`；未知命令、缺参、角色不符、shell 元字符和过长参数均拒绝。
 - [~] Control Service 接入责任链：`AuthN -> AuthZ -> RateLimit -> AuditStart -> Validate -> Handler -> AuditEnd`
-  - 已完成：MQTT 控制入口接入命令白名单校验；gRPC `ExecuteCommand` 仍 fail-closed，禁止 raw shell。
-  - 未完成原因：尚未形成通用中间件责任链，也未接入 RateLimit/AuditStart/AuditEnd。
-  - 下一步：抽象 `CommandRequestPipeline`，统一 MQTT/gRPC 控制入口。
+  - 已完成：`agent-core::chain::SecurityInterceptorLayer`（`tower::Layer`）已接入北向 gRPC server，强制执行 `IdentityExtractor`（mTLS / `x-cc-principal` 头）→ `ResourceMapper`（按 method path 映射 Resource/Action）→ RBAC `authorize` → `AuditWriter::write_entry`（同步）→ Handler → `AuditWriter::write_exit`（异步），失败返回 `Status::PermissionDenied` 并 fail-closed；MQTT 控制入口接入命令白名单校验；gRPC `ExecuteCommand` 仍 fail-closed，禁止 raw shell。
+  - 未完成原因：尚未接入 RateLimit；MQTT 控制路径未复用同一中间件；中间件单元测试覆盖映射、身份解析、审计写入，但端到端集成测试待补。
+  - 下一步：抽象 `CommandRequestPipeline` 统一 MQTT/gRPC 入口；接入限流（`tower::limit` 或自研 token bucket）。
 - [~] RBAC 决策覆盖控制命令、文件传输、配置变更、升级入口、业务应用控制入口
-  - 已完成：RBAC 模型覆盖这些 resource 类型。
-  - 未完成原因：实际运行时只接入 MQTT command policy，其他入口还未强制调用 Security Center。
-  - 下一步：在 gRPC service 方法入口统一构造 `SecurityRequest` 并授权。
+  - 已完成：RBAC 模型覆盖 `Telemetry / ControlCommand / FileTransfer / Configuration / Upgrade / AppControl / SecurityPolicy`；`ResourceMapper` 已为所有 `StationControl` 与 `FileTransfer` gRPC 方法登记 (Resource, Action) 映射，由 `SecurityInterceptorLayer` 在所有 gRPC 入口统一调用 RBAC。
+  - 未完成原因：`SetWatchingApp`、`ReplaceTelemetryProfiles` 等配置变更入口的运行时审计字段需在 handler 内补充；MQTT 控制入口仍走旧 command_policy 路径，未与责任链统一。
+  - 下一步：在 gRPC handler 内读取 `SecurityContext` 进一步携带操作上下文；将 MQTT 控制入口收口到同一 RBAC 决策点。
 - [~] 旧命令执行入口迁移到白名单模板；无法迁移的入口默认禁用并记录 backlog
   - 已完成：gRPC `ExecuteCommand` 继续禁用 raw shell；MQTT `restart_process` 受白名单约束。
   - 未完成原因：`restart_process` 仍直接按进程名 terminate，尚未通过 PAL Sandbox/ProcessManager。
   - 下一步：把进程操作迁移到 PAL ProcessManager，并接入审计。
 - [~] **交付物**：命令安全框架 + RBAC 策略配置 + 责任链中间件
-  - 已完成：命令安全框架雏形和测试。
-  - 未完成原因：策略配置化和通用责任链未完成。
+  - 已完成：命令安全框架雏形和测试；`SecurityInterceptorLayer` 责任链中间件骨架已落地并接入 gRPC server。
+  - 未完成原因：策略配置化（外部 TOML/JSON 加载）、RateLimit、MQTT 入口收口未完成。
 
 #### W1.5 Sandbox 与资源限制集成（4 天）
 
@@ -378,22 +394,23 @@
 - [x] 定义 `AuditEvent` 标准字段：`event_id`、`timestamp`、`tenant_id`、`device_id`、`principal`、`action`、`resource`、`target`、`params_digest`、`result`、`trace_id`、`prev_hash`、`hash`
   - 已完成：`agent-core::security::AuditEvent` 已实现并可序列化。
 - [~] 审计事件分类覆盖：控制操作、配置变更、文件传输、升级入口、业务应用控制入口、安全策略变更
-  - 已完成：`Resource` 枚举已包含控制、文件传输、配置、升级、应用控制、安全策略。
-  - 未完成原因：各业务入口尚未全部写入审计事件。
-  - 下一步：在 gRPC/MQTT/file/config/upgrade 入口统一写 audit event。
+  - 已完成：`Resource` 枚举已包含控制、文件传输、配置、升级、应用控制、安全策略；`SecurityInterceptorLayer` 在所有 gRPC 入口（StationControl + FileTransfer）统一写入 AuditStart/AuditEnd 事件，包含 principal、action、resource、target、result、trace_id、prev_hash、hash。
+  - 未完成原因：MQTT 控制入口和 OTA/Config/AppControl 业务 handler 内的细粒度审计字段（params_digest、目标 ID）尚未补齐。
+  - 下一步：在各业务 handler 内基于 `SecurityContext` 完善审计字段；MQTT 控制入口接入同一审计 sink。
 - [x] 实现链式哈希防篡改，支持本地完整性验证
-  - 已完成：`AuditChain` SHA-256 哈希链和篡改检测测试已通过。
-- [ ] 审计写入异步批量化，但控制类操作必须保证至少记录入口事件
-  - 未完成原因：当前是 State Store 同步 append API，没有异步批处理。
-  - 下一步：增加 audit writer background task 和 bounded channel。
+  - 已完成：`AuditChain` SHA-256 哈希链和篡改检测测试已通过；`AuditWriter` 在写入前基于上一条事件 `hash` 计算 `prev_hash` 并产生当前 `hash`。
+- [~] 审计写入异步批量化，但控制类操作必须保证至少记录入口事件
+  - 已完成：`AuditWriter` 提供 `write_entry`（同步、阻塞到持久化成功才放行 handler）+ `write_exit`（异步、tokio mpsc channel 后台落盘）双通道；控制入口事件强一致。
+  - 未完成原因：尚未实现批量化（按时间窗或条数 flush）和 bounded channel 反压策略。
+  - 下一步：将 exit 通道升级为 bounded + 周期性批写；增加 channel 满时的降级策略（写 fallback 队列或 metric）。
 - [ ] 审计出口事件写入失败时产生内部告警，不阻塞主流程但不得静默丢失
-  - 未完成原因：业务入口尚未统一接 audit writer，也没有告警回路。
-  - 下一步：审计写失败时写 tracing error + 自监控计数器 + 本地 fallback 队列。
+  - 未完成原因：`write_exit` 的后台 task 失败仅 trace::error，缺自监控计数器与本地 fallback 队列。
+  - 下一步：审计写失败时 emit metric + 本地 fallback 队列。
 - [x] 提供本地查询接口，支持按时间、principal、action、result 检索
   - 已完成：State Store 新增 `AuditEventFilter` 与 `query_audit_events(filter)`，支持 principal/action/resource/result/time range 查询。
 - [~] **交付物**：Audit Chain 模块 + 审计字段规范 + 完整性校验工具
-  - 已完成：模块、字段、持久化、完整性校验核心和查询 API。
-  - 未完成原因：独立 CLI 校验工具尚未补齐。
+  - 已完成：模块、字段、持久化、完整性校验核心、查询 API、责任链中间件统一写入路径。
+  - 未完成原因：独立 CLI 校验工具、批量化、写失败告警尚未补齐。
 
 #### W1.7 文件传输安全（4 天）
 
@@ -412,12 +429,13 @@
 - [ ] 实现令牌桶限速，默认不限制，但支持全局与单任务限速配置
   - 未完成原因：未实现限速。
   - 下一步：在 upload/download stream loop 加 token bucket。
-- [ ] 文件上传、下载、拒绝、校验失败都必须写入 Audit Chain
-  - 未完成原因：Audit Chain 已实现，但 FileTransferService 未接入。
-  - 下一步：在 upload/download 开始、完成、拒绝、失败路径写 audit event。
+- [~] 文件上传、下载、拒绝、校验失败都必须写入 Audit Chain
+  - 已完成：`SecurityInterceptorLayer` 在 `FileTransfer/Upload` 与 `FileTransfer/Download` 入口写入 AuthN/AuthZ/AuditStart/AuditEnd 事件，未授权请求 fail-closed 并产生 deny 审计。
+  - 未完成原因：handler 内部的细粒度事件（路径白名单拒绝、配额拒绝、SHA-256 校验失败、断点续传中断）尚未单独写审计。
+  - 下一步：在 `FileTransferService` handler 内基于 `SecurityContext` 增补 deny/failed 审计事件。
 - [~] **交付物**：升级版 File Transfer Service + 文件传输安全测试
-  - 已完成：路径安全测试和整体 SHA-256 测试。
-  - 未完成原因：配额、断点状态、分块校验、审计未完成。
+  - 已完成：路径安全测试、整体 SHA-256 测试、传输入口的 RBAC + AuditStart/AuditEnd。
+  - 未完成原因：配额、断点状态、分块校验、handler 内部细粒度审计未完成。
 
 #### W1.8 三平台安全 PAL 补齐（4 天）【新增】
 
@@ -444,9 +462,10 @@
 
 #### W1.9 安全测试与供应链检查（4 天）
 
-- [ ] mTLS 测试：成功连接、无客户端证书拒绝、错误 CA 拒绝、过期证书拒绝
-  - 未完成原因：gRPC mTLS 未接入，MQTT TLS 尚无 broker 集成测试。
-  - 下一步：补 TLS 测试夹具。
+- [~] mTLS 测试：成功连接、无客户端证书拒绝、错误 CA 拒绝、过期证书拒绝
+  - 已完成：gRPC `ServerTlsConfig` 通过 `require_client_auth` + `client_auth_optional` 联动，`build_grpc_tls_config` 单元覆盖；`IdentityExtractor` 单测覆盖 mTLS peer cert SAN/CN 解析与无证书 anonymous 兜底。
+  - 未完成原因：尚无端到端 TLS 测试夹具（成功握手、错误 CA、过期证书、缺客户端证书的真实 client/server 集成测试）；MQTT TLS 也无 broker 集成测试。
+  - 下一步：补 tonic TLS 集成测试夹具与本地 MQTT TLS broker 测试。
 - [x] 防重放测试：重复 nonce 拒绝、timestamp 超窗拒绝、nonce 过期清理
   - 已完成：`ReplayGuard` 单元测试覆盖重复 nonce 和 timestamp 超窗；过期清理在 check 流程中覆盖。
 - [x] 命令注入测试：shell 元字符、参数逃逸、未登记 command_id 均被拒绝
@@ -456,9 +475,9 @@
   - 未完成原因：符号链接逃逸、白名单外写入测试未补。
   - 下一步：引入 PAL PathResolver 后补 symlink 测试。
 - [~] RBAC 测试：admin/operator/readonly 权限矩阵覆盖控制、配置、文件、升级入口
-  - 已完成：readonly/operator 的关键拒绝/允许测试。
-  - 未完成原因：admin 全矩阵、配置/文件/升级入口运行时接入未完整。
-  - 下一步：补矩阵化测试并接入服务入口。
+  - 已完成：readonly/operator 关键拒绝/允许测试；`ResourceMapper` 测试覆盖 StationControl + FileTransfer 全部 gRPC 方法到 (Resource, Action) 映射；`SecurityInterceptorLayer` 单元测试覆盖授权拒绝路径。
+  - 未完成原因：admin 全矩阵、责任链端到端 e2e（含 mTLS + 审计落盘）测试未补。
+  - 下一步：补端到端 RBAC 矩阵测试（mock SecurityCenter + tonic in-memory channel）。
 - [x] 审计篡改测试：手动修改审计数据库后完整性校验失败
   - 已完成：`agent-store` 测试覆盖修改 result 后 verify 失败。
 - [ ] Fuzz 测试：manifest 解析、命令参数 schema、文件传输元数据
