@@ -16,6 +16,7 @@ use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
 use crate::config::AppConfig;
+use crate::app_platform::{AppPlatformService, AppPlatformState};
 use crate::grpc::cc::{
     AppControlResult, AppStartParameter, AppStartingResult, CaptureScreenChunk,
     CaptureScreenRequest, CloseAppRequest, CloseAppResponse, DownloadChunk, DownloadRequest, Empty,
@@ -219,6 +220,57 @@ pub async fn run(
         resource_mapper,
         state.device_id().to_string(),
     );
+
+    // Start southbound IPC server for payload applications if enabled
+    let _app_platform_handle = if state.config().app_platform.enabled {
+        let app_platform_state = Arc::new(AppPlatformState::new(state.device_id().to_string()));
+        let app_platform_service = AppPlatformService::new(Arc::clone(&app_platform_state));
+        let socket_path = state.config().app_platform.socket_path.clone();
+
+        info!(socket_path = %socket_path, "Starting southbound IPC server");
+
+        let shutdown_clone = shutdown.clone();
+        Some(tokio::spawn(async move {
+            #[allow(unused_mut)]
+            let mut shutdown_clone = shutdown_clone;
+            #[cfg(unix)]
+            {
+                use tokio::net::UnixListener;
+                use tokio_stream::wrappers::UnixListenerStream;
+
+                // Ensure parent directory exists
+                if let Some(parent) = std::path::Path::new(&socket_path).parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+
+                // Remove existing socket file
+                let _ = tokio::fs::remove_file(&socket_path).await;
+
+                let uds = UnixListener::bind(&socket_path)
+                    .context("bind Unix socket for app platform")?;
+                let uds_stream = UnixListenerStream::new(uds);
+
+                info!(socket_path = %socket_path, "Southbound IPC server listening");
+
+                Server::builder()
+                    .add_service(app_platform_service.into_server())
+                    .serve_with_incoming_shutdown(uds_stream, async move {
+                        let _ = shutdown_clone.changed().await;
+                    })
+                    .await
+                    .context("run southbound IPC server")
+            }
+
+            #[cfg(windows)]
+            {
+                // TODO: Implement Named Pipe server for Windows
+                anyhow::bail!("Windows Named Pipe support not yet implemented")
+            }
+        }))
+    } else {
+        info!("Southbound IPC server disabled");
+        None
+    };
 
     let mut server = Server::builder();
     if control_tls.enabled {

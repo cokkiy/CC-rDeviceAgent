@@ -1,0 +1,143 @@
+syntax = "proto3";
+
+package cc.app.v1;
+
+// Southbound IPC service for payload applications
+// Applications connect via Unix Domain Socket (Linux/macOS) or Named Pipe (Windows)
+
+// AppPlatform service - main entry point for payload applications
+service AppPlatform {
+  // Register application with the agent platform
+  rpc RegisterApp(RegisterAppRequest) returns (RegisterAppResponse);
+
+  // Send heartbeat to maintain session
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Report application health status
+  rpc ReportHealth(HealthReport) returns (HealthResponse);
+
+  // Publish data to backend (uplink)
+  rpc PublishData(PublishDataRequest) returns (PublishDataResponse);
+
+  // Subscribe to configuration changes (server streaming)
+  rpc WatchConfig(WatchConfigRequest) returns (stream ConfigUpdate);
+
+  // Subscribe to data from backend (downlink, server streaming)
+  rpc SubscribeData(SubscribeDataRequest) returns (stream DataMessage);
+
+  // Query current configuration snapshot
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+
+  // Unregister application (graceful shutdown)
+  rpc UnregisterApp(UnregisterAppRequest) returns (UnregisterAppResponse);
+}
+
+// Application registration
+message RegisterAppRequest {
+  string app_name = 1;           // Application name (e.g., "desktop-agent")
+  string app_version = 2;        // Application version (e.g., "1.0.0")
+  repeated string capabilities = 3; // Declared capabilities (e.g., ["screen-capture", "input-control"])
+  map<string, string> metadata = 4; // Additional metadata
+}
+
+message RegisterAppResponse {
+  string app_id = 1;             // Assigned application ID
+  string session_token = 2;      // Session token for authentication
+  int64 session_expires_at = 3;  // Unix timestamp when session expires
+  string device_id = 4;          // Device ID this app is running on
+}
+
+// Heartbeat to keep session alive
+message HeartbeatRequest {
+  string app_id = 1;
+  string session_token = 2;
+}
+
+message HeartbeatResponse {
+  bool session_valid = 1;
+  int64 session_expires_at = 2;  // Updated expiration timestamp
+}
+
+// Health reporting
+message HealthReport {
+  string app_id = 1;
+  string session_token = 2;
+  HealthStatus status = 3;
+  string message = 4;            // Optional status message
+  map<string, string> metrics = 5; // Custom health metrics
+}
+
+enum HealthStatus {
+  HEALTH_UNKNOWN = 0;
+  HEALTH_HEALTHY = 1;
+  HEALTH_DEGRADED = 2;
+  HEALTH_UNHEALTHY = 3;
+}
+
+message HealthResponse {
+  bool accepted = 1;
+}
+
+// Data publishing (app → backend)
+message PublishDataRequest {
+  string app_id = 1;
+  string session_token = 2;
+  string topic = 3;              // Topic suffix (agent will prefix with app namespace)
+  bytes payload = 4;             // Data payload
+  map<string, string> metadata = 5; // Optional metadata
+}
+
+message PublishDataResponse {
+  bool accepted = 1;
+  string message_id = 2;         // Assigned message ID for tracking
+}
+
+// Configuration watching
+message WatchConfigRequest {
+  string app_id = 1;
+  string session_token = 2;
+  repeated string keys = 3;      // Config keys to watch (empty = watch all)
+}
+
+message ConfigUpdate {
+  string key = 1;
+  string value = 2;
+  int64 version = 3;             // Config version number
+  string change_type = 4;        // "created", "updated", "deleted"
+}
+
+// Data subscription (backend → app)
+message SubscribeDataRequest {
+  string app_id = 1;
+  string session_token = 2;
+  repeated string topics = 3;    // Topics to subscribe to
+}
+
+message DataMessage {
+  string topic = 1;
+  bytes payload = 2;
+  int64 timestamp = 3;           // Unix timestamp
+  map<string, string> metadata = 4;
+}
+
+// Configuration snapshot query
+message GetConfigRequest {
+  string app_id = 1;
+  string session_token = 2;
+  repeated string keys = 3;      // Keys to retrieve (empty = get all)
+}
+
+message GetConfigResponse {
+  map<string, string> config = 1;
+  int64 version = 2;
+}
+
+// Unregistration
+message UnregisterAppRequest {
+  string app_id = 1;
+  string session_token = 2;
+}
+
+message UnregisterAppResponse {
+  bool success = 1;
+}

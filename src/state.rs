@@ -125,6 +125,10 @@ impl AppState {
         &self.device_id
     }
 
+    pub fn config(&self) -> &AppConfig {
+        &self.config
+    }
+
     /// Get a reference to the MQTT client, if MQTT is enabled
     pub fn mqtt_client(&self) -> Option<&MqttClient> {
         self.mqtt_client.as_ref()

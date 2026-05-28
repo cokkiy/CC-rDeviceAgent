@@ -1,5 +1,6 @@
 pub mod alert_engine;
 pub mod app;
+pub mod app_platform;
 pub mod batch;
 pub mod batch_store;
 pub mod config;

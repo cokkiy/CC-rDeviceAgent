@@ -11,6 +11,7 @@ use crate::telemetry::{TelemetryProfileConfig, validate_profiles};
 pub struct AppConfig {
     pub service: ServiceConfig,
     pub control: ControlConfig,
+    pub app_platform: AppPlatformConfig,
     pub mqtt: MqttConfig,
 }
 
@@ -39,6 +40,14 @@ pub struct FileTransferConfig {
 pub struct ControlConfig {
     pub listen_addr: String,
     pub tls: TlsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AppPlatformConfig {
+    pub enabled: bool,
+    pub socket_path: String,
+    pub session_duration_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -91,6 +100,20 @@ impl Default for ControlConfig {
         Self {
             listen_addr: "0.0.0.0:50051".to_string(),
             tls: TlsConfig::default(),
+        }
+    }
+}
+
+impl Default for AppPlatformConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            socket_path: if cfg!(windows) {
+                r"\\.\pipe\cc-rdeviceagent-app".to_string()
+            } else {
+                "/var/run/cc-rdeviceagent/app.sock".to_string()
+            },
+            session_duration_secs: 3600,
         }
     }
 }

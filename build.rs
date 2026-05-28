@@ -5,6 +5,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     tonic_prost_build::configure()
-        .compile_protos(&["proto/cc.proto"], &["proto"])?;
+        .compile_protos(&["proto/cc.proto", "proto/app.proto"], &["proto"])?;
     Ok(())
 }
