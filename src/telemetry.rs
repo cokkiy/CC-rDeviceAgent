@@ -205,7 +205,7 @@ pub struct TelemetryProfileSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TelemetryBundle {
     pub ts: i64,
-    pub station_id: String,
+    pub device_id: String,
     pub schema_version: u32,
     pub profiles_version: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -326,7 +326,7 @@ pub struct CollectedRuntimeTelemetry {
 impl CollectedTelemetrySections {
     pub fn filter_to_bundle(
         &self,
-        station_id: &str,
+        device_id: &str,
         profiles_version: u64,
         profile: &TelemetryProfileConfig,
     ) -> TelemetryBundle {
@@ -353,7 +353,7 @@ impl CollectedTelemetrySections {
 
         TelemetryBundle {
             ts: self.ts,
-            station_id: station_id.to_string(),
+            device_id: device_id.to_string(),
             schema_version: TELEMETRY_SCHEMA_VERSION,
             profiles_version,
             runtime: runtime.filter(|value| {
@@ -441,17 +441,13 @@ impl TelemetryScheduler {
         indices: &[usize],
         now_ms: u64,
         collected: &CollectedTelemetrySections,
-        station_id: &str,
+        device_id: &str,
         profiles_version: u64,
     ) -> Vec<TelemetryBundle> {
         let mut bundles = Vec::with_capacity(indices.len());
         for index in indices {
             let profile = &mut self.profiles[*index];
-            bundles.push(collected.filter_to_bundle(
-                station_id,
-                profiles_version,
-                &profile.profile,
-            ));
+            bundles.push(collected.filter_to_bundle(device_id, profiles_version, &profile.profile));
             profile.next_collection_ms = advance_due_time(
                 profile.next_collection_ms,
                 profile.profile.collection_interval_ms,
@@ -547,12 +543,12 @@ mod tests {
     #[test]
     fn telemetry_bundle_round_trip_preserves_enriched_payload() {
         let profile = TelemetryProfileConfig::default_full(5000);
-        let bundle = sample_collected(1000).filter_to_bundle("station-a", 3, &profile);
+        let bundle = sample_collected(1000).filter_to_bundle("device-a", 3, &profile);
 
         let json = serde_json::to_string(&bundle).unwrap();
         let parsed: TelemetryBundle = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed.station_id, "station-a");
+        assert_eq!(parsed.device_id, "device-a");
         assert_eq!(parsed.schema_version, TELEMETRY_SCHEMA_VERSION);
         assert_eq!(parsed.profiles_version, 3);
         assert_eq!(parsed.apps.unwrap().len(), 1);
@@ -570,7 +566,7 @@ mod tests {
             includes: vec![TelemetryInclude::RuntimeBasic],
         };
 
-        let bundle = sample_collected(1000).filter_to_bundle("station-a", 2, &profile);
+        let bundle = sample_collected(1000).filter_to_bundle("device-a", 2, &profile);
 
         assert!(bundle.apps.is_none());
         assert!(bundle.network.is_none());
@@ -641,7 +637,7 @@ mod tests {
         );
 
         let collected = sample_collected(0);
-        let bundles = scheduler.collect_due_bundles(&due_collect, 0, &collected, "station-a", 1);
+        let bundles = scheduler.collect_due_bundles(&due_collect, 0, &collected, "device-a", 1);
 
         let fast = &bundles[0];
         let slow = &bundles[1];

@@ -1,6 +1,6 @@
 //! MQTT client module for CC-rDeviceAgent
 //!
-//! This module implements MQTT telemetry publishing for the station service.
+//! This module implements MQTT telemetry publishing for the device service.
 //! It publishes telemetry data to the CC-Aggregator via MQTT and
 //! subscribes to command messages from the CC-Aggregator.
 
@@ -44,10 +44,10 @@ enum MqttWorkerMsg {
     },
 }
 
-/// MQTT client wrapper for the station service
+/// MQTT client wrapper for the device service
 pub struct MqttClient {
     client: AsyncClient,
-    station_id: String,
+    device_id: String,
     worker_tx: mpsc::Sender<MqttWorkerMsg>,
 }
 
@@ -55,7 +55,7 @@ impl Clone for MqttClient {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
-            station_id: self.station_id.clone(),
+            device_id: self.device_id.clone(),
             worker_tx: self.worker_tx.clone(),
         }
     }
@@ -63,18 +63,18 @@ impl Clone for MqttClient {
 
 impl MqttClient {
     /// Create a new MQTT client connection
-    pub fn new(broker_host: &str, broker_port: u16, station_id: &str) -> Result<Self> {
-        Self::new_with_tls_config(broker_host, broker_port, station_id, None)
+    pub fn new(broker_host: &str, broker_port: u16, device_id: &str) -> Result<Self> {
+        Self::new_with_tls_config(broker_host, broker_port, device_id, None)
     }
 
     /// Create a new MQTT client connection with optional TLS client authentication.
     pub fn new_with_tls_config(
         broker_host: &str,
         broker_port: u16,
-        station_id: &str,
+        device_id: &str,
         tls: Option<&TlsConfig>,
     ) -> Result<Self> {
-        let client_id = format!("cc-station-{}", station_id);
+        let client_id = format!("cc-device-{}", device_id);
         let mut mqttoptions = MqttOptions::new(client_id.clone(), (broker_host, broker_port));
         mqttoptions.set_keep_alive(30);
         mqttoptions.set_clean_session(true);
@@ -162,20 +162,20 @@ impl MqttClient {
         });
 
         info!(
-            "MQTT client created: broker={}:{}, station_id={}",
-            broker_host, broker_port, station_id
+            "MQTT client created: broker={}:{}, device_id={}",
+            broker_host, broker_port, device_id
         );
 
         Ok(Self {
             client,
-            station_id: station_id.to_string(),
+            device_id: device_id.to_string(),
             worker_tx,
         })
     }
 
     /// Subscribe to command topic and return a receiver for command messages.
     pub async fn subscribe_commands(&self) -> Result<mpsc::Receiver<Command>> {
-        let command_topic = format!("cc/{}/command", self.station_id);
+        let command_topic = format!("cc/{}/command", self.device_id);
 
         let (response_tx, mut response_rx) =
             mpsc::channel::<Result<mpsc::Receiver<Command>, anyhow::Error>>(1);
@@ -198,7 +198,7 @@ impl MqttClient {
 
     /// Publish a command acknowledgment to the aggregator
     pub async fn publish_command_ack(&self, ack: &CommandAck) -> Result<()> {
-        let topic = format!("cc/{}/command/ack", self.station_id);
+        let topic = format!("cc/{}/command/ack", self.device_id);
         let payload = serde_json::to_vec(ack)?;
 
         self.client
@@ -210,14 +210,14 @@ impl MqttClient {
         Ok(())
     }
 
-    /// Get the station ID
-    pub fn station_id(&self) -> &str {
-        &self.station_id
+    /// Get the device ID
+    pub fn device_id(&self) -> &str {
+        &self.device_id
     }
 
     /// Publish telemetry data
     pub async fn publish_telemetry(&self, telemetry: &TelemetryBundle) -> Result<()> {
-        let topic = format!("cc/{}/telemetry", self.station_id);
+        let topic = format!("cc/{}/telemetry", self.device_id);
         let payload = serde_json::to_vec(telemetry)?;
 
         self.client
@@ -225,13 +225,13 @@ impl MqttClient {
             .await
             .context("Failed to publish telemetry")?;
 
-        debug!("Published telemetry for station: {}", self.station_id);
+        debug!("Published telemetry for device: {}", self.device_id);
         Ok(())
     }
 
-    /// Publish station status
-    pub async fn publish_status(&self, status: &StationStatus) -> Result<()> {
-        let topic = format!("cc/{}/status", self.station_id);
+    /// Publish device status
+    pub async fn publish_status(&self, status: &DeviceStatus) -> Result<()> {
+        let topic = format!("cc/{}/status", self.device_id);
         let payload = serde_json::to_vec(status)?;
 
         self.client
@@ -239,13 +239,13 @@ impl MqttClient {
             .await
             .context("Failed to publish status")?;
 
-        debug!("Published status for station: {}", self.station_id);
+        debug!("Published status for device: {}", self.device_id);
         Ok(())
     }
 
-    /// Publish station descriptor
-    pub async fn publish_descriptor(&self, descriptor: &StationDescriptor) -> Result<()> {
-        let topic = format!("cc/{}/descriptor/announce", self.station_id);
+    /// Publish device descriptor
+    pub async fn publish_descriptor(&self, descriptor: &DeviceDescriptor) -> Result<()> {
+        let topic = format!("cc/{}/descriptor/announce", self.device_id);
         let payload = serde_json::to_vec(descriptor)?;
 
         self.client
@@ -253,7 +253,7 @@ impl MqttClient {
             .await
             .context("Failed to publish descriptor")?;
 
-        info!("Published station descriptor for: {}", self.station_id);
+        info!("Published device descriptor for: {}", self.device_id);
         Ok(())
     }
 }
@@ -263,20 +263,20 @@ fn read_tls_file(path: Option<&std::path::PathBuf>, field: &str) -> Result<Vec<u
     std::fs::read(path).with_context(|| format!("read {field} from {}", path.display()))
 }
 
-/// Station status
+/// Device status
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StationStatus {
-    pub station_id: String,
+pub struct DeviceStatus {
+    pub device_id: String,
     pub online: bool,
     pub last_seen: i64,
     pub version: Option<String>,
     pub alert: Option<String>,
 }
 
-impl StationStatus {
-    pub fn online(station_id: String) -> Self {
+impl DeviceStatus {
+    pub fn online(device_id: String) -> Self {
         Self {
-            station_id,
+            device_id,
             online: true,
             last_seen: chrono::Utc::now().timestamp_millis(),
             version: None,
@@ -285,17 +285,17 @@ impl StationStatus {
     }
 }
 
-/// Station descriptor
+/// Device descriptor
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StationDescriptor {
-    pub station_id: String,
+pub struct DeviceDescriptor {
+    pub device_id: String,
     pub descriptors: Vec<TelemetryDescriptor>,
 }
 
-impl StationDescriptor {
-    pub fn new(station_id: String) -> Self {
+impl DeviceDescriptor {
+    pub fn new(device_id: String) -> Self {
         Self {
-            station_id,
+            device_id,
             descriptors: Vec::new(),
         }
     }

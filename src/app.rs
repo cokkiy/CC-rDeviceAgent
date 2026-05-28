@@ -29,8 +29,8 @@ use crate::grpc::cc::{
     ReplaceTelemetryProfilesRequest, RestartAppRequest, RestartAppResponse, ServerVersionInfo,
     SetStateGatheringIntervalRequest, SetWatchingAppRequest, ShutdownRequest, StartAppRequest,
     StartAppResponse, TelemetryInclude, TelemetryIncludeDefinition, TelemetryProfile, UploadChunk,
-    UploadResult, file_transfer_server::FileTransfer, file_transfer_server::FileTransferServer,
-    station_control_server::StationControl, station_control_server::StationControlServer,
+    UploadResult, device_control_server::DeviceControl, device_control_server::DeviceControlServer,
+    file_transfer_server::FileTransfer, file_transfer_server::FileTransferServer,
 };
 use crate::platform;
 use crate::state::{AppState, find_process_ids_by_name, terminate_process};
@@ -54,7 +54,7 @@ pub async fn run(
     }
 
     info!(
-        station_id = state.station_id(),
+        device_id = state.device_id(),
         listen_addr = %listen_addr,
         watched_processes = state.watched_processes().len(),
         console_telemetry,
@@ -75,8 +75,7 @@ pub async fn run(
             info!("MQTT status publisher started");
 
             loop {
-                let status =
-                    crate::mqtt::StationStatus::online(state_clone.station_id().to_string());
+                let status = crate::mqtt::DeviceStatus::online(state_clone.device_id().to_string());
                 if let Err(error) = mqtt_client.publish_status(&status).await {
                     warn!(error = %error, "failed to publish MQTT status");
                 }
@@ -140,7 +139,7 @@ pub async fn run(
                         &due_collect,
                         now_ms,
                         &collected,
-                        state_clone.station_id(),
+                        state_clone.device_id(),
                         profiles_version,
                     ) {
                         if let Err(error) = mqtt_client.publish_telemetry(&bundle).await {
@@ -219,14 +218,14 @@ pub async fn run(
         RbacPolicy::default(),
         ReplayGuard::new(Duration::from_secs(300)),
     )));
-    let identity_extractor = IdentityExtractor::new(state.station_id().to_string());
+    let identity_extractor = IdentityExtractor::new(state.device_id().to_string());
     let resource_mapper = ResourceMapper;
     let security_layer = SecurityInterceptorLayer::new(
         Arc::clone(&security_center),
         audit_writer,
         identity_extractor,
         resource_mapper,
-        state.station_id().to_string(),
+        state.device_id().to_string(),
     );
 
     let mut server = Server::builder();
@@ -238,7 +237,7 @@ pub async fn run(
 
     server
         .layer(security_layer)
-        .add_service(StationControlServer::new(StationControlService {
+        .add_service(DeviceControlServer::new(DeviceControlService {
             state: Arc::clone(&state),
         }))
         .add_service(FileTransferServer::new(FileTransferService {
@@ -268,12 +267,12 @@ fn read_required_file(path: Option<&Path>, field: &str) -> Result<Vec<u8>> {
 }
 
 #[derive(Clone)]
-struct StationControlService {
+struct DeviceControlService {
     state: Arc<AppState>,
 }
 
 #[tonic::async_trait]
-impl StationControl for StationControlService {
+impl DeviceControl for DeviceControlService {
     type CaptureScreenStream =
         Pin<Box<dyn Stream<Item = Result<CaptureScreenChunk, Status>> + Send>>;
 
@@ -339,7 +338,7 @@ impl StationControl for StationControlService {
     async fn get_system_state(
         &self,
         _request: Request<Empty>,
-    ) -> Result<Response<crate::grpc::cc::StationSystemState>, Status> {
+    ) -> Result<Response<crate::grpc::cc::DeviceSystemState>, Status> {
         Ok(Response::new(self.state.system_state()))
     }
 
@@ -1147,8 +1146,8 @@ async fn console_telemetry_task(state: Arc<AppState>) {
             .join(" | ");
 
         println!(
-            "[telemetry] station={} cpu={:.2}% memory={} proc_count={} tcp_connections={} udp_listeners={} watched=[{}] net=[{}]",
-            running.station_id,
+            "[telemetry] device={} cpu={:.2}% memory={} proc_count={} tcp_connections={} udp_listeners={} watched=[{}] net=[{}]",
+            running.device_id,
             running.cpu,
             running.current_memory,
             running.proc_count,

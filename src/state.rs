@@ -21,11 +21,11 @@ use agent_core::security::{Principal, Role};
 
 use crate::config::AppConfig;
 use crate::grpc::cc::{
-    AppRunningState, AppsRunningStateEnvelope, ConnectionInformation, GetAllProcessInfoResponse,
+    AppRunningState, AppsRunningStateEnvelope, ConnectionInformation, DeviceNetworkInterface,
+    DeviceRunningState, DeviceSystemState, GetAllProcessInfoResponse,
     GetConnectionInformationsResponse, GetFileInfoResponse, GetNetworkInterfacesResponse,
     GetTcpListenerInfosResponse, GetUdpListenerInfosResponse, InterfaceStatistics, ListenerInfo,
-    NetworkInterfaceInfo, Process, ProcessInfo, ServerVersionInfo, StationNetworkInterface,
-    StationRunningState, StationSystemState, Statistics, VersionInfo,
+    NetworkInterfaceInfo, Process, ProcessInfo, ServerVersionInfo, Statistics, VersionInfo,
 };
 use crate::mqtt::{Command, CommandAck, MqttClient};
 use crate::network_counters;
@@ -39,7 +39,7 @@ use tracing::{debug, info, warn};
 pub struct AppState {
     config: AppConfig,
     config_path: PathBuf,
-    station_id: String,
+    device_id: String,
     service_path: PathBuf,
     udp_target: SocketAddr,
     agent_target: SocketAddr,
@@ -55,7 +55,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: AppConfig, config_path: PathBuf, service_path: PathBuf) -> Result<Self> {
-        let station_id = config.resolved_station_id();
+        let device_id = config.resolved_device_id();
         let udp_target = config
             .service
             .udp_display_target
@@ -72,11 +72,11 @@ impl AppState {
             match MqttClient::new_with_tls_config(
                 &config.mqtt.broker_host,
                 config.mqtt.broker_port,
-                &station_id,
+                &device_id,
                 Some(&config.mqtt.tls),
             ) {
                 Ok(client) => {
-                    tracing::info!("MQTT client initialized for station: {}", station_id);
+                    tracing::info!("MQTT client initialized for device: {}", device_id);
                     Some(client)
                 }
                 Err(e) => {
@@ -117,7 +117,7 @@ impl AppState {
             server_version: build_server_version(),
             config,
             config_path,
-            station_id,
+            device_id,
             service_path,
             udp_target,
             agent_target,
@@ -128,8 +128,8 @@ impl AppState {
         })
     }
 
-    pub fn station_id(&self) -> &str {
-        &self.station_id
+    pub fn device_id(&self) -> &str {
+        &self.device_id
     }
 
     /// Get a reference to the MQTT client, if MQTT is enabled
@@ -274,7 +274,7 @@ impl AppState {
 
         let principal = Principal::new(
             "default",
-            self.station_id.clone(),
+            self.device_id.clone(),
             "mqtt-backend",
             Role::Operator,
         );
@@ -346,24 +346,24 @@ impl AppState {
         self.server_version.clone()
     }
 
-    pub fn system_state(&self) -> StationSystemState {
+    pub fn system_state(&self) -> DeviceSystemState {
         let system = prepared_system_snapshot();
 
-        StationSystemState {
-            station_id: self.station_id.clone(),
+        DeviceSystemState {
+            device_id: self.device_id.clone(),
             total_memory: saturating_i64(system.total_memory()),
             computer_name: System::host_name().unwrap_or_default(),
-            network_interfaces: collect_station_network_interfaces(),
+            network_interfaces: collect_device_network_interfaces(),
             os_name: System::name().unwrap_or_default(),
             os_version: System::os_version().unwrap_or_default(),
         }
     }
 
-    pub fn running_state(&self) -> StationRunningState {
+    pub fn running_state(&self) -> DeviceRunningState {
         let system = prepared_system_snapshot();
 
-        StationRunningState {
-            station_id: self.station_id.clone(),
+        DeviceRunningState {
+            device_id: self.device_id.clone(),
             current_memory: saturating_i64(system.used_memory()),
             cpu: system.global_cpu_usage(),
             proc_count: system.processes().len() as i32,
@@ -377,7 +377,7 @@ impl AppState {
 
         let items = watched
             .iter()
-            .map(|name| collect_app_running_state(&system, &self.station_id, name))
+            .map(|name| collect_app_running_state(&system, &self.device_id, name))
             .collect();
 
         AppsRunningStateEnvelope { items }
@@ -385,15 +385,15 @@ impl AppState {
 
     /// Single async snapshot for both running_state and apps_running_state — avoids
     /// two separate blocking sleeps per telemetry cycle.
-    pub async fn running_and_apps_state(&self) -> (StationRunningState, AppsRunningStateEnvelope) {
-        let station_id = self.station_id.clone();
+    pub async fn running_and_apps_state(&self) -> (DeviceRunningState, AppsRunningStateEnvelope) {
+        let device_id = self.device_id.clone();
         let watched = self.watched_processes();
         let server_version = self.server_version();
 
         let system = prepared_system_snapshot_async().await;
 
-        let running = StationRunningState {
-            station_id: station_id.clone(),
+        let running = DeviceRunningState {
+            device_id: device_id.clone(),
             current_memory: saturating_i64(system.used_memory()),
             cpu: system.global_cpu_usage(),
             proc_count: system.processes().len() as i32,
@@ -402,7 +402,7 @@ impl AppState {
 
         let items = watched
             .iter()
-            .map(|name| collect_app_running_state(&system, &station_id, name))
+            .map(|name| collect_app_running_state(&system, &device_id, name))
             .collect();
         let apps = AppsRunningStateEnvelope { items };
 
@@ -655,9 +655,9 @@ impl AppState {
 
     pub fn network_statistics(&self) -> Statistics {
         match self.network_sampler.lock() {
-            Ok(mut sampler) => sampler.snapshot(&self.station_id, self),
+            Ok(mut sampler) => sampler.snapshot(&self.device_id, self),
             Err(_) => Statistics {
-                station_id: self.station_id.clone(),
+                device_id: self.device_id.clone(),
                 ..Default::default()
             },
         }
@@ -760,11 +760,11 @@ fn collect_network_interface_infos() -> Vec<NetworkInterfaceInfo> {
 }
 
 #[cfg(feature = "packet-capture")]
-fn collect_station_network_interfaces() -> Vec<StationNetworkInterface> {
+fn collect_device_network_interfaces() -> Vec<DeviceNetworkInterface> {
     interfaces()
         .into_iter()
         .filter(|iface| !iface.is_loopback())
-        .map(|iface| StationNetworkInterface {
+        .map(|iface| DeviceNetworkInterface {
             mac: iface
                 .mac
                 .map(|value| value.to_string())
@@ -775,11 +775,11 @@ fn collect_station_network_interfaces() -> Vec<StationNetworkInterface> {
 }
 
 #[cfg(not(feature = "packet-capture"))]
-fn collect_station_network_interfaces() -> Vec<StationNetworkInterface> {
+fn collect_device_network_interfaces() -> Vec<DeviceNetworkInterface> {
     Vec::new()
 }
 
-fn collect_app_running_state(system: &System, station_id: &str, name: &str) -> AppRunningState {
+fn collect_app_running_state(system: &System, device_id: &str, name: &str) -> AppRunningState {
     if let Some(id_text) = name.strip_prefix("Id:") {
         let pid = id_text.parse::<u32>().ok();
         if let Some(pid) = pid.and_then(|value| {
@@ -788,7 +788,7 @@ fn collect_app_running_state(system: &System, station_id: &str, name: &str) -> A
                 .map(|process| (value, process))
         }) {
             return AppRunningState {
-                station_id: station_id.to_string(),
+                device_id: device_id.to_string(),
                 process: Some(Process {
                     id: pid.0 as i32,
                     process_name: pid.1.name().to_string_lossy().into_owned(),
@@ -805,7 +805,7 @@ fn collect_app_running_state(system: &System, station_id: &str, name: &str) -> A
         }
 
         return AppRunningState {
-            station_id: station_id.to_string(),
+            device_id: device_id.to_string(),
             process: Some(Process {
                 id: -1,
                 process_name: String::new(),
@@ -846,7 +846,7 @@ fn collect_app_running_state(system: &System, station_id: &str, name: &str) -> A
     }
 
     AppRunningState {
-        station_id: station_id.to_string(),
+        device_id: device_id.to_string(),
         process: Some(Process {
             id: process_id,
             process_name,
@@ -930,7 +930,7 @@ fn process_name_candidates(name: &str) -> Vec<String> {
 /// Two match strategies are used to handle Linux quirks:
 /// 1. **Prefix match on process name**: Linux truncates comm (and thus `name()`) to 15
 ///    characters in `/proc/[pid]/stat`. So `cc-rdeviceagent` (18 chars) appears as
-///    `cc-rstationserv`. We match when the watched name *starts with* the process name.
+///    `cc-rdeviceserv`. We match when the watched name *starts with* the process name.
 /// 2. **Cmdline substring match**: Script runners (node, python, sh) show up under the
 ///    interpreter name. We check whether any cmdline token *contains* the watched name,
 ///    so `vite` running as `node /path/to/vite` is found via its cmdline.
@@ -944,7 +944,7 @@ fn process_matches_name(process: &sysinfo::Process, candidates: &[String]) -> bo
         }
 
         // Prefix match: kernel truncates comm to 15 chars on Linux.
-        // e.g. "cc-rstationserv" matches watched name "cc-rdeviceagent"
+        // e.g. "cc-rdeviceserv" matches watched name "cc-rdeviceagent"
         if candidate.starts_with(&proc_name) && proc_name.len() == 15 {
             return true;
         }
@@ -1036,7 +1036,7 @@ impl NetworkSampler {
         }
     }
 
-    fn snapshot(&mut self, station_id: &str, state: &AppState) -> Statistics {
+    fn snapshot(&mut self, device_id: &str, state: &AppState) -> Statistics {
         self.networks.refresh(true);
 
         let rates = self
@@ -1109,7 +1109,7 @@ impl NetworkSampler {
             .unwrap_or_default();
 
         Statistics {
-            station_id: station_id.to_string(),
+            device_id: device_id.to_string(),
             datagrams_received: saturating_i64(snapshot.datagrams_received),
             datagrams_sent: saturating_i64(snapshot.datagrams_sent),
             datagrams_discarded: saturating_i64(snapshot.datagrams_discarded),

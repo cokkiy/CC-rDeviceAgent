@@ -41,7 +41,7 @@ pub struct SecurityContext {
 #[derive(Debug, Clone)]
 pub struct PeerCerts(pub Vec<tonic::transport::Certificate>);
 
-/// Maps a gRPC method path (e.g. "/cc.grpc.v1.StationControl/Reboot")
+/// Maps a gRPC method path (e.g. "/cc.grpc.v1.DeviceControl/Reboot")
 /// to a `(Resource, Action)` pair for RBAC decisions.
 #[derive(Debug, Clone, Default)]
 pub struct ResourceMapper;
@@ -50,40 +50,39 @@ impl ResourceMapper {
     pub fn map(&self, path: &str) -> Option<(Resource, Action)> {
         let (svc, method) = path.rsplit_once('/')?;
         match (svc, method) {
-            ("/cc.grpc.v1.StationControl", "StartApp")
-            | ("/cc.grpc.v1.StationControl", "CloseApp")
-            | ("/cc.grpc.v1.StationControl", "RestartApp") => {
+            ("/cc.grpc.v1.DeviceControl", "StartApp")
+            | ("/cc.grpc.v1.DeviceControl", "CloseApp")
+            | ("/cc.grpc.v1.DeviceControl", "RestartApp") => {
                 Some((Resource::AppControl, Action::Execute))
             }
-            ("/cc.grpc.v1.StationControl", "Reboot")
-            | ("/cc.grpc.v1.StationControl", "Shutdown") => {
+            ("/cc.grpc.v1.DeviceControl", "Reboot") | ("/cc.grpc.v1.DeviceControl", "Shutdown") => {
                 Some((Resource::ControlCommand, Action::Execute))
             }
-            ("/cc.grpc.v1.StationControl", "ExecuteCommand") => {
+            ("/cc.grpc.v1.DeviceControl", "ExecuteCommand") => {
                 Some((Resource::ControlCommand, Action::Execute))
             }
-            ("/cc.grpc.v1.StationControl", "GetSystemState")
-            | ("/cc.grpc.v1.StationControl", "GetAllProcessInfo")
-            | ("/cc.grpc.v1.StationControl", "GetServerVersion")
-            | ("/cc.grpc.v1.StationControl", "GetServicePath")
-            | ("/cc.grpc.v1.StationControl", "GetAppLauncherPath")
-            | ("/cc.grpc.v1.StationControl", "GetNetworkInterfaces")
-            | ("/cc.grpc.v1.StationControl", "GetConnectionInformations")
-            | ("/cc.grpc.v1.StationControl", "GetTcpListenerInfos")
-            | ("/cc.grpc.v1.StationControl", "GetUdpListenerInfos")
-            | ("/cc.grpc.v1.StationControl", "GetCurrentTelemetrySchema")
-            | ("/cc.grpc.v1.StationControl", "GetTelemetryProfiles")
-            | ("/cc.grpc.v1.StationControl", "CaptureScreen") => {
+            ("/cc.grpc.v1.DeviceControl", "GetSystemState")
+            | ("/cc.grpc.v1.DeviceControl", "GetAllProcessInfo")
+            | ("/cc.grpc.v1.DeviceControl", "GetServerVersion")
+            | ("/cc.grpc.v1.DeviceControl", "GetServicePath")
+            | ("/cc.grpc.v1.DeviceControl", "GetAppLauncherPath")
+            | ("/cc.grpc.v1.DeviceControl", "GetNetworkInterfaces")
+            | ("/cc.grpc.v1.DeviceControl", "GetConnectionInformations")
+            | ("/cc.grpc.v1.DeviceControl", "GetTcpListenerInfos")
+            | ("/cc.grpc.v1.DeviceControl", "GetUdpListenerInfos")
+            | ("/cc.grpc.v1.DeviceControl", "GetCurrentTelemetrySchema")
+            | ("/cc.grpc.v1.DeviceControl", "GetTelemetryProfiles")
+            | ("/cc.grpc.v1.DeviceControl", "CaptureScreen") => {
                 Some((Resource::Telemetry, Action::Read))
             }
-            ("/cc.grpc.v1.StationControl", "SetWatchingApp") => {
+            ("/cc.grpc.v1.DeviceControl", "SetWatchingApp") => {
                 Some((Resource::Configuration, Action::Write))
             }
-            ("/cc.grpc.v1.StationControl", "ReplaceTelemetryProfiles") => {
+            ("/cc.grpc.v1.DeviceControl", "ReplaceTelemetryProfiles") => {
                 Some((Resource::Configuration, Action::Write))
             }
-            ("/cc.grpc.v1.StationControl", "GetFileInfo")
-            | ("/cc.grpc.v1.StationControl", "RenameFile") => {
+            ("/cc.grpc.v1.DeviceControl", "GetFileInfo")
+            | ("/cc.grpc.v1.DeviceControl", "RenameFile") => {
                 Some((Resource::FileTransfer, Action::Write))
             }
             ("/cc.grpc.v1.FileTransfer", "Upload") => Some((Resource::FileTransfer, Action::Write)),
@@ -295,7 +294,7 @@ pub struct SecurityInterceptorLayer {
     audit_writer: AuditWriter,
     identity_extractor: IdentityExtractor,
     resource_mapper: ResourceMapper,
-    station_id: String,
+    device_id: String,
 }
 
 impl SecurityInterceptorLayer {
@@ -304,14 +303,14 @@ impl SecurityInterceptorLayer {
         audit_writer: AuditWriter,
         identity_extractor: IdentityExtractor,
         resource_mapper: ResourceMapper,
-        station_id: impl Into<String>,
+        device_id: impl Into<String>,
     ) -> Self {
         Self {
             security_center,
             audit_writer,
             identity_extractor,
             resource_mapper,
-            station_id: station_id.into(),
+            device_id: device_id.into(),
         }
     }
 }
@@ -326,7 +325,7 @@ impl<S> tower::Layer<S> for SecurityInterceptorLayer {
             audit_writer: self.audit_writer.clone(),
             identity_extractor: self.identity_extractor.clone(),
             resource_mapper: self.resource_mapper.clone(),
-            station_id: self.station_id.clone(),
+            device_id: self.device_id.clone(),
         }
     }
 }
@@ -339,7 +338,7 @@ pub struct SecurityInterceptor<S> {
     audit_writer: AuditWriter,
     identity_extractor: IdentityExtractor,
     resource_mapper: ResourceMapper,
-    station_id: String,
+    device_id: String,
 }
 
 impl<S> tower::Service<http::Request<tonic::body::Body>> for SecurityInterceptor<S>
@@ -368,7 +367,7 @@ where
         let audit_writer = self.audit_writer.clone();
         let identity_extractor = self.identity_extractor.clone();
         let resource_mapper = self.resource_mapper.clone();
-        let _station_id = self.station_id.clone();
+        let _device_id = self.device_id.clone();
 
         Box::pin(async move {
             let now = SystemTime::now();
@@ -524,22 +523,22 @@ mod tests {
     // ---- ResourceMapper tests ----
 
     #[test]
-    fn mapper_covers_all_station_control_methods() {
+    fn mapper_covers_all_device_control_methods() {
         let mapper = ResourceMapper;
         assert_eq!(
-            mapper.map("/cc.grpc.v1.StationControl/StartApp"),
+            mapper.map("/cc.grpc.v1.DeviceControl/StartApp"),
             Some((Resource::AppControl, Action::Execute))
         );
         assert_eq!(
-            mapper.map("/cc.grpc.v1.StationControl/Reboot"),
+            mapper.map("/cc.grpc.v1.DeviceControl/Reboot"),
             Some((Resource::ControlCommand, Action::Execute))
         );
         assert_eq!(
-            mapper.map("/cc.grpc.v1.StationControl/GetSystemState"),
+            mapper.map("/cc.grpc.v1.DeviceControl/GetSystemState"),
             Some((Resource::Telemetry, Action::Read))
         );
         assert_eq!(
-            mapper.map("/cc.grpc.v1.StationControl/SetWatchingApp"),
+            mapper.map("/cc.grpc.v1.DeviceControl/SetWatchingApp"),
             Some((Resource::Configuration, Action::Write))
         );
         assert_eq!(
