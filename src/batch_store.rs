@@ -190,6 +190,8 @@ impl BatchTaskStore {
         let conn = Connection::open(&self.db_path)
             .with_context(|| format!("open batch store DB at {}", self.db_path.display()))?;
 
+        migrate_batch_device_schema(&conn)?;
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS batch_tasks (
                 id TEXT PRIMARY KEY,
@@ -216,7 +218,7 @@ impl BatchTaskStore {
             "CREATE TABLE IF NOT EXISTS batch_execution_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL,
-                station_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
                 script_id TEXT NOT NULL,
                 parameters TEXT NOT NULL,
                 result TEXT,
@@ -342,7 +344,7 @@ impl BatchTaskStore {
         conn: &Connection,
     ) -> Result<Vec<BatchExecutionItem>> {
         let mut stmt = conn.prepare(
-            "SELECT station_id, script_id, parameters, result, status FROM batch_execution_items WHERE task_id = ?",
+            "SELECT device_id, script_id, parameters, result, status FROM batch_execution_items WHERE task_id = ?",
         )?;
 
         let items: Vec<BatchExecutionItem> = stmt
@@ -352,7 +354,7 @@ impl BatchTaskStore {
                 let status_str: String = row.get(4)?;
 
                 Ok(ExecutionItemData {
-                    station_id: row.get(0)?,
+                    device_id: row.get(0)?,
                     script_id: row.get(1)?,
                     parameters: params_json,
                     result: result_json,
@@ -369,7 +371,7 @@ impl BatchTaskStore {
                     serde_json::from_str(&data.status).unwrap_or_default();
 
                 BatchExecutionItem {
-                    station_id: data.station_id,
+                    device_id: data.device_id,
                     script_id: Uuid::parse_str(&data.script_id).unwrap_or_else(|_| Uuid::new_v4()),
                     parameters,
                     result,
@@ -429,11 +431,11 @@ impl BatchTaskStore {
             let status_json = serde_json::to_string(&item.status)?;
 
             conn.execute(
-                "INSERT INTO batch_execution_items (task_id, station_id, script_id, parameters, result, status)
+                "INSERT INTO batch_execution_items (task_id, device_id, script_id, parameters, result, status)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     task.id.to_string(),
-                    item.station_id,
+                    item.device_id,
                     item.script_id.to_string(),
                     params_json,
                     result_json,
@@ -508,11 +510,11 @@ impl BatchTaskStore {
                 let status_json = serde_json::to_string(&item.status)?;
 
                 conn.execute(
-                    "INSERT INTO batch_execution_items (task_id, station_id, script_id, parameters, result, status)
+                    "INSERT INTO batch_execution_items (task_id, device_id, script_id, parameters, result, status)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         task.id.to_string(),
-                        item.station_id,
+                        item.device_id,
                         item.script_id.to_string(),
                         params_json,
                         result_json,
@@ -553,6 +555,40 @@ impl BatchTaskStore {
     }
 }
 
+fn migrate_batch_device_schema(conn: &Connection) -> Result<()> {
+    if table_exists(conn, "batch_execution_items")?
+        && column_exists(conn, "batch_execution_items", "station_id")?
+        && !column_exists(conn, "batch_execution_items", "device_id")?
+    {
+        conn.execute(
+            "ALTER TABLE batch_execution_items RENAME COLUMN station_id TO device_id",
+            [],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for name in names {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[derive(Debug)]
 struct RowData {
     id: String,
@@ -575,7 +611,7 @@ struct RowData {
 
 #[derive(Debug)]
 struct ExecutionItemData {
-    station_id: String,
+    device_id: String,
     script_id: String,
     parameters: String,
     result: Option<String>,
@@ -683,14 +719,14 @@ mod tests {
         for i in 0..3 {
             let mut task = BatchTask::new(format!("Task {}", i), &script);
             task.execution_items.push(BatchExecutionItem {
-                station_id: format!("station-{}", i),
+                device_id: format!("device-{}", i),
                 script_id: script.id,
                 parameters: Vec::new(),
                 result: None,
                 status: BatchExecutionStatus::Success,
             });
             task.execution_items.push(BatchExecutionItem {
-                station_id: format!("station-{}-2", i),
+                device_id: format!("device-{}-2", i),
                 script_id: script.id,
                 parameters: Vec::new(),
                 result: None,
@@ -707,6 +743,53 @@ mod tests {
         assert_eq!(stats.failed_executions, 3);
 
         // Clean up
+        std::fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn migrates_legacy_station_execution_items() {
+        let db_path = temp_dir().join(format!("batch_migration_{}.db", Uuid::new_v4()));
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "
+                CREATE TABLE batch_tasks (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    target_selector TEXT NOT NULL,
+                    execution_policy TEXT NOT NULL,
+                    script_id TEXT NOT NULL,
+                    script_content TEXT NOT NULL,
+                    default_parameters TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    progress INTEGER NOT NULL DEFAULT 0,
+                    total_items INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    created_by TEXT
+                );
+                CREATE TABLE batch_execution_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    station_id TEXT NOT NULL,
+                    script_id TEXT NOT NULL,
+                    parameters TEXT NOT NULL,
+                    result TEXT,
+                    status TEXT NOT NULL
+                );
+                ",
+            )
+            .unwrap();
+        }
+
+        let _store = BatchTaskStore::new(db_path.clone()).unwrap();
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(column_exists(&conn, "batch_execution_items", "device_id").unwrap());
+        assert!(!column_exists(&conn, "batch_execution_items", "station_id").unwrap());
+
         std::fs::remove_file(db_path).ok();
     }
 }
