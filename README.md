@@ -235,11 +235,6 @@ launcher_proxy_path = ""
 [control]
 listen_addr = "0.0.0.0:50051"
 
-[agent]
-listen_addr = "127.0.0.1:50052"
-auth_token = "local-change-me"
-preferred_display_index = 0
-
 [mqtt]
 enabled = true
 broker_host = "localhost"
@@ -288,10 +283,6 @@ Run the service in the foreground:
 ./target/release/cc-rdeviceagent foreground --config ./CC-rDeviceAgent.toml
 ```
 
-The repository also contains a desktop agent implementation used by the Linux and
-Windows packaging scripts and by the smoke test. Those scripts expect a companion
-binary named `cc-rdeviceagent-agent` built alongside the service.
-
 For local debugging, you can mirror runtime telemetry to stdout:
 
 ```bash
@@ -305,7 +296,7 @@ For local debugging, you can mirror runtime telemetry to stdout:
 The crate also contains library modules for scripts, tags, groups, batch execution,
 alerts, and plugin abstractions. Those modules are present in the source tree, but
 the current service entry point is centered on gRPC device control,
-file transfer, telemetry collection, MQTT publishing, and desktop capture proxying.
+file transfer, telemetry collection, and MQTT publishing.
 
 ### Crate structure (planned)
 
@@ -333,11 +324,9 @@ agent-cli/          CLI entry point
 
 The install scripts:
 
-- copy the service and desktop-agent binaries
+- copy the service binary
 - install `CC-rDeviceAgent.toml`
-- generate and stamp a shared `agent.auth_token`
 - register the service with `systemd` or SCM
-- register the desktop agent as a user service or scheduled task
 
 ---
 
@@ -368,12 +357,6 @@ Useful commands:
 
 ```bash
 ./scripts/test-smoke.sh
-```
-
-Optional strict desktop-capture validation:
-
-```bash
-REQUIRE_CAPTURE=1 ./scripts/test-smoke.sh
 ```
 
 ---
