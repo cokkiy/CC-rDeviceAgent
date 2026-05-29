@@ -1,7 +1,10 @@
 pub mod alert_engine;
 pub mod app;
+pub mod app_lifecycle;
 pub mod app_platform;
 pub mod batch;
+pub mod config_manager;
+pub mod data_router;
 pub mod batch_store;
 pub mod config;
 pub mod cpu_monitor;
