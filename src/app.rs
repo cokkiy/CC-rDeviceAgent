@@ -223,7 +223,12 @@ pub async fn run(
 
     // Start southbound IPC server for payload applications if enabled
     let _app_platform_handle = if state.config().app_platform.enabled {
-        let app_platform_state = Arc::new(AppPlatformState::new(state.device_id().to_string()));
+        let app_platform_store = agent_store::StateStore::open(&store_path)
+            .map_err(|e| anyhow::anyhow!("open state store for app platform: {e}"))?;
+        let app_platform_state = Arc::new(AppPlatformState::new(
+            state.device_id().to_string(),
+            app_platform_store,
+        ));
         let app_platform_service = AppPlatformService::new(Arc::clone(&app_platform_state));
         let socket_path = state.config().app_platform.socket_path.clone();
 

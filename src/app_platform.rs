@@ -1,17 +1,19 @@
-//! Southbound IPC service for payload applications
+//! Southbound IPC service for payload applications (W2.1 + W2.2)
 //!
-//! This module implements the AppPlatform gRPC service that allows payload applications
-//! to register, publish data, subscribe to configuration, and report health status.
+//! AppPlatformService implements the AppPlatform gRPC service. Sessions are
+//! persisted to StateStore so they survive agent restarts.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+use agent_store::{AppHealthReportRecord, AppSessionRecord, StateStore};
 
 use crate::grpc::app::{
     app_platform_server::{AppPlatform, AppPlatformServer},
@@ -21,85 +23,72 @@ use crate::grpc::app::{
     UnregisterAppResponse, WatchConfigRequest,
 };
 
-/// Application session information
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct AppSession {
-    app_id: String,
-    app_name: String,
-    app_version: String,
-    session_token: String,
-    capabilities: Vec<String>,
-    metadata: HashMap<String, String>,
-    registered_at: SystemTime,
-    expires_at: SystemTime,
-    last_heartbeat: SystemTime,
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+fn now_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
-/// Application platform state
+fn generate_session_token() -> String {
+    use ring::rand::{SecureRandom, SystemRandom};
+    let rng = SystemRandom::new();
+    let mut bytes = [0u8; 32];
+    rng.fill(&mut bytes).expect("rng fill");
+    base16::encode_lower(&bytes)
+}
+
+/// SHA-256 the token before storing — never persist raw bearer tokens.
+fn hash_token(token: &str) -> String {
+    use ring::digest::{SHA256, digest};
+    let d = digest(&SHA256, token.as_bytes());
+    base16::encode_lower(d.as_ref())
+}
+
+fn generate_app_id(app_name: &str) -> String {
+    format!("{}_{}", app_name, now_unix_ms())
+}
+
+// ── state ─────────────────────────────────────────────────────────────────────
+
 pub struct AppPlatformState {
     device_id: String,
-    sessions: RwLock<HashMap<String, AppSession>>,
-    session_duration_secs: u64,
+    store: Mutex<StateStore>,
+    session_duration: Duration,
 }
 
 impl AppPlatformState {
-    pub fn new(device_id: String) -> Self {
+    pub fn new(device_id: String, store: StateStore) -> Self {
         Self {
             device_id,
-            sessions: RwLock::new(HashMap::new()),
-            session_duration_secs: 3600, // 1 hour default
+            store: Mutex::new(store),
+            session_duration: Duration::from_secs(3600),
         }
     }
 
-    fn generate_app_id(&self, app_name: &str) -> String {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        format!("{}_{}", app_name, timestamp)
-    }
+    fn validate_session(&self, app_id: &str, token: &str) -> Result<(), Status> {
+        let store = self.store.lock().unwrap();
+        let rec = store
+            .load_app_session(app_id)
+            .map_err(|e| Status::internal(e.to_string()))?
+            .ok_or_else(|| Status::unauthenticated("unknown app_id"))?;
 
-    fn generate_session_token(&self) -> String {
-        use ring::rand::{SecureRandom, SystemRandom};
-        let rng = SystemRandom::new();
-        let mut token = [0u8; 32];
-        rng.fill(&mut token).unwrap();
-        base16::encode_lower(&token)
-    }
-
-    fn validate_session(&self, app_id: &str, session_token: &str) -> Result<(), Status> {
-        let sessions = self.sessions.read().unwrap();
-        let session = sessions
-            .get(app_id)
-            .ok_or_else(|| Status::unauthenticated("Invalid app_id"))?;
-
-        if session.session_token != session_token {
-            return Err(Status::unauthenticated("Invalid session_token"));
+        if rec.revoked {
+            return Err(Status::unauthenticated("session revoked"));
         }
-
-        let now = SystemTime::now();
-        if now > session.expires_at {
-            return Err(Status::unauthenticated("Session expired"));
+        if rec.session_token_hash != hash_token(token) {
+            return Err(Status::unauthenticated("invalid session_token"));
         }
-
+        if now_unix_ms() > rec.expires_at_unix_ms {
+            return Err(Status::unauthenticated("session expired"));
+        }
         Ok(())
     }
-
-    fn extend_session(&self, app_id: &str) -> Result<SystemTime, Status> {
-        let mut sessions = self.sessions.write().unwrap();
-        let session = sessions
-            .get_mut(app_id)
-            .ok_or_else(|| Status::not_found("Session not found"))?;
-
-        let now = SystemTime::now();
-        let new_expiry = now + std::time::Duration::from_secs(self.session_duration_secs);
-        session.expires_at = new_expiry;
-        session.last_heartbeat = now;
-
-        Ok(new_expiry)
-    }
 }
+
+// ── service ───────────────────────────────────────────────────────────────────
 
 pub struct AppPlatformService {
     state: Arc<AppPlatformState>,
@@ -122,49 +111,49 @@ impl AppPlatform for AppPlatformService {
         request: Request<RegisterAppRequest>,
     ) -> Result<Response<RegisterAppResponse>, Status> {
         let req = request.into_inner();
-
         if req.app_name.is_empty() {
             return Err(Status::invalid_argument("app_name is required"));
         }
 
-        let app_id = self.state.generate_app_id(&req.app_name);
-        let session_token = self.state.generate_session_token();
-        let now = SystemTime::now();
-        let expires_at = now + std::time::Duration::from_secs(self.state.session_duration_secs);
+        let app_id = generate_app_id(&req.app_name);
+        let token = generate_session_token();
+        let now = now_unix_ms();
+        let expires = now + self.state.session_duration.as_millis() as i64;
 
-        let session = AppSession {
+        let record = AppSessionRecord {
             app_id: app_id.clone(),
             app_name: req.app_name.clone(),
             app_version: req.app_version.clone(),
-            session_token: session_token.clone(),
-            capabilities: req.capabilities.clone(),
-            metadata: req.metadata.clone(),
-            registered_at: now,
-            expires_at,
-            last_heartbeat: now,
+            session_token_hash: hash_token(&token),
+            capabilities_json: serde_json::to_string(&req.capabilities)
+                .unwrap_or_else(|_| "[]".into()),
+            metadata_json: serde_json::to_string(&req.metadata)
+                .unwrap_or_else(|_| "{}".into()),
+            device_id: self.state.device_id.clone(),
+            registered_at_unix_ms: now,
+            expires_at_unix_ms: expires,
+            last_heartbeat_unix_ms: now,
+            revoked: false,
         };
 
         self.state
-            .sessions
-            .write()
+            .store
+            .lock()
             .unwrap()
-            .insert(app_id.clone(), session);
+            .upsert_app_session(&record)
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         info!(
             app_id = %app_id,
             app_name = %req.app_name,
             app_version = %req.app_version,
-            capabilities = ?req.capabilities,
             "Application registered"
         );
 
         Ok(Response::new(RegisterAppResponse {
             app_id,
-            session_token,
-            session_expires_at: expires_at
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64,
+            session_token: token,
+            session_expires_at: expires / 1000,
             device_id: self.state.device_id.clone(),
         }))
     }
@@ -174,20 +163,23 @@ impl AppPlatform for AppPlatformService {
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
         let req = request.into_inner();
+        self.state.validate_session(&req.app_id, &req.session_token)?;
+
+        let now = now_unix_ms();
+        let new_exp = now + self.state.session_duration.as_millis() as i64;
 
         self.state
-            .validate_session(&req.app_id, &req.session_token)?;
+            .store
+            .lock()
+            .unwrap()
+            .touch_app_session(&req.app_id, new_exp, now)
+            .map_err(|e| Status::internal(e.to_string()))?;
 
-        let new_expiry = self.state.extend_session(&req.app_id)?;
-
-        debug!(app_id = %req.app_id, "Heartbeat received");
+        debug!(app_id = %req.app_id, "Heartbeat");
 
         Ok(Response::new(HeartbeatResponse {
             session_valid: true,
-            session_expires_at: new_expiry
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64,
+            session_expires_at: new_exp / 1000,
         }))
     }
 
@@ -196,18 +188,29 @@ impl AppPlatform for AppPlatformService {
         request: Request<HealthReport>,
     ) -> Result<Response<HealthResponse>, Status> {
         let req = request.into_inner();
+        self.state.validate_session(&req.app_id, &req.session_token)?;
+
+        let record = AppHealthReportRecord {
+            app_id: req.app_id.clone(),
+            status: format!("{:?}", req.status),
+            message: req.message.clone(),
+            metrics_json: serde_json::to_string(&req.metrics)
+                .unwrap_or_else(|_| "{}".into()),
+            reported_at_unix_ms: now_unix_ms(),
+        };
 
         self.state
-            .validate_session(&req.app_id, &req.session_token)?;
+            .store
+            .lock()
+            .unwrap()
+            .insert_health_report(&record)
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         info!(
             app_id = %req.app_id,
             status = ?req.status,
-            message = %req.message,
             "Health report received"
         );
-
-        // TODO: Store health status and trigger health evaluator
 
         Ok(Response::new(HealthResponse { accepted: true }))
     }
@@ -217,20 +220,17 @@ impl AppPlatform for AppPlatformService {
         request: Request<PublishDataRequest>,
     ) -> Result<Response<PublishDataResponse>, Status> {
         let req = request.into_inner();
-
-        self.state
-            .validate_session(&req.app_id, &req.session_token)?;
+        self.state.validate_session(&req.app_id, &req.session_token)?;
 
         debug!(
             app_id = %req.app_id,
             topic = %req.topic,
-            payload_size = req.payload.len(),
+            bytes = req.payload.len(),
             "Data published"
         );
 
-        // TODO: Route data to backend via MQTT or other transport
-
-        let message_id = format!("msg_{}", uuid::Uuid::new_v4());
+        // TODO(W2.4): route through DataRouter to MQTT
+        let message_id = format!("msg_{}", now_unix_ms());
 
         Ok(Response::new(PublishDataResponse {
             accepted: true,
@@ -245,24 +245,13 @@ impl AppPlatform for AppPlatformService {
         request: Request<WatchConfigRequest>,
     ) -> Result<Response<Self::WatchConfigStream>, Status> {
         let req = request.into_inner();
-
-        self.state
-            .validate_session(&req.app_id, &req.session_token)?;
+        self.state.validate_session(&req.app_id, &req.session_token)?;
 
         let (tx, rx) = mpsc::channel(16);
+        info!(app_id = %req.app_id, keys = ?req.keys, "Config watch started");
 
-        info!(
-            app_id = %req.app_id,
-            keys = ?req.keys,
-            "Config watch started"
-        );
-
-        // TODO: Implement actual config watching
-        // For now, just keep the stream open
-        tokio::spawn(async move {
-            // Stream will close when tx is dropped
-            let _ = tx;
-        });
+        // TODO(W2.5): push real ConfigUpdate events from ConfigManager
+        tokio::spawn(async move { drop(tx) });
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }
@@ -274,22 +263,13 @@ impl AppPlatform for AppPlatformService {
         request: Request<SubscribeDataRequest>,
     ) -> Result<Response<Self::SubscribeDataStream>, Status> {
         let req = request.into_inner();
-
-        self.state
-            .validate_session(&req.app_id, &req.session_token)?;
+        self.state.validate_session(&req.app_id, &req.session_token)?;
 
         let (tx, rx) = mpsc::channel(16);
+        info!(app_id = %req.app_id, topics = ?req.topics, "Data subscription started");
 
-        info!(
-            app_id = %req.app_id,
-            topics = ?req.topics,
-            "Data subscription started"
-        );
-
-        // TODO: Implement actual data subscription
-        tokio::spawn(async move {
-            let _ = tx;
-        });
+        // TODO(W2.4): push real DataMessage events from DataRouter
+        tokio::spawn(async move { drop(tx) });
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }
@@ -299,21 +279,11 @@ impl AppPlatform for AppPlatformService {
         request: Request<GetConfigRequest>,
     ) -> Result<Response<GetConfigResponse>, Status> {
         let req = request.into_inner();
+        self.state.validate_session(&req.app_id, &req.session_token)?;
 
-        self.state
-            .validate_session(&req.app_id, &req.session_token)?;
-
-        debug!(
-            app_id = %req.app_id,
-            keys = ?req.keys,
-            "Config snapshot requested"
-        );
-
-        // TODO: Implement actual config retrieval
-        let config = HashMap::new();
-
+        // TODO(W2.5): read from ConfigManager
         Ok(Response::new(GetConfigResponse {
-            config,
+            config: HashMap::new(),
             version: 1,
         }))
     }
@@ -323,14 +293,122 @@ impl AppPlatform for AppPlatformService {
         request: Request<UnregisterAppRequest>,
     ) -> Result<Response<UnregisterAppResponse>, Status> {
         let req = request.into_inner();
+        self.state.validate_session(&req.app_id, &req.session_token)?;
 
         self.state
-            .validate_session(&req.app_id, &req.session_token)?;
-
-        self.state.sessions.write().unwrap().remove(&req.app_id);
+            .store
+            .lock()
+            .unwrap()
+            .revoke_app_session(&req.app_id)
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         info!(app_id = %req.app_id, "Application unregistered");
 
         Ok(Response::new(UnregisterAppResponse { success: true }))
+    }
+}
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_store::StateStore;
+
+    fn make_service() -> AppPlatformService {
+        let store = StateStore::open_in_memory().unwrap();
+        let state = Arc::new(AppPlatformState::new("test-device".into(), store));
+        AppPlatformService::new(state)
+    }
+
+    #[tokio::test]
+    async fn register_and_heartbeat() {
+        let svc = make_service();
+
+        let resp = svc
+            .register_app(Request::new(RegisterAppRequest {
+                app_name: "test-app".into(),
+                app_version: "1.0.0".into(),
+                capabilities: vec!["metrics".into()],
+                metadata: HashMap::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(!resp.app_id.is_empty());
+        assert!(!resp.session_token.is_empty());
+        assert_eq!(resp.device_id, "test-device");
+
+        let hb = svc
+            .heartbeat(Request::new(HeartbeatRequest {
+                app_id: resp.app_id.clone(),
+                session_token: resp.session_token.clone(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(hb.session_valid);
+        assert!(hb.session_expires_at > 0);
+    }
+
+    #[tokio::test]
+    async fn invalid_token_rejected() {
+        let svc = make_service();
+
+        let resp = svc
+            .register_app(Request::new(RegisterAppRequest {
+                app_name: "app2".into(),
+                app_version: "1.0".into(),
+                capabilities: vec![],
+                metadata: HashMap::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let err = svc
+            .heartbeat(Request::new(HeartbeatRequest {
+                app_id: resp.app_id.clone(),
+                session_token: "wrong-token".into(),
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn unregister_revokes_session() {
+        let svc = make_service();
+
+        let resp = svc
+            .register_app(Request::new(RegisterAppRequest {
+                app_name: "app3".into(),
+                app_version: "0.1".into(),
+                capabilities: vec![],
+                metadata: HashMap::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        svc.unregister_app(Request::new(UnregisterAppRequest {
+            app_id: resp.app_id.clone(),
+            session_token: resp.session_token.clone(),
+        }))
+        .await
+        .unwrap();
+
+        let err = svc
+            .heartbeat(Request::new(HeartbeatRequest {
+                app_id: resp.app_id,
+                session_token: resp.session_token,
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::Unauthenticated);
     }
 }
