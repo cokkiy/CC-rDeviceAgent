@@ -17,6 +17,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::AppConfig;
 use crate::app_platform::{AppPlatformService, AppPlatformState};
+use crate::config_manager::ConfigManager;
+use crate::data_router::DataRouter;
 use crate::grpc::cc::{
     AppControlResult, AppStartParameter, AppStartingResult, CaptureScreenChunk,
     CaptureScreenRequest, CloseAppRequest, CloseAppResponse, DownloadChunk, DownloadRequest, Empty,
@@ -31,6 +33,7 @@ use crate::grpc::cc::{
     UploadResult, device_control_server::DeviceControl, device_control_server::DeviceControlServer,
     file_transfer_server::FileTransfer, file_transfer_server::FileTransferServer,
 };
+use crate::health_evaluator::HealthEvaluator;
 use crate::platform;
 use crate::state::{AppState, find_process_ids_by_name, terminate_process};
 use crate::telemetry::{TelemetryProfileConfig, TelemetryScheduler};
@@ -225,10 +228,41 @@ pub async fn run(
     let _app_platform_handle = if state.config().app_platform.enabled {
         let app_platform_store = agent_store::StateStore::open(&store_path)
             .map_err(|e| anyhow::anyhow!("open state store for app platform: {e}"))?;
-        let app_platform_state = Arc::new(AppPlatformState::new(
+        let config_store = agent_store::StateStore::open(&store_path)
+            .map_err(|e| anyhow::anyhow!("open state store for config manager: {e}"))?;
+        let config_manager = ConfigManager::new_with_store(config_store);
+        let data_router = Arc::new(DataRouter::new(
+            "default".to_string(),
+            state.device_id().to_string(),
+        ));
+        let (health_action_tx, mut health_action_rx) = tokio::sync::mpsc::channel(64);
+        let health_evaluator = HealthEvaluator::new(health_action_tx);
+        tokio::spawn(async move {
+            while let Some(action) = health_action_rx.recv().await {
+                warn!(
+                    app_id = %action.app_id,
+                    action = ?action.action,
+                    failures = action.consecutive_failures,
+                    "App health action emitted"
+                );
+            }
+        });
+        let mut app_platform_state = AppPlatformState::new(
             state.device_id().to_string(),
             app_platform_store,
-        ));
+        )
+        .with_session_duration(Duration::from_secs(
+            state.config().app_platform.session_duration_secs.max(1),
+        ))
+        .with_config_manager(config_manager)
+        .with_health_evaluator(health_evaluator);
+        if let Some(mqtt_client) = state.mqtt_client().cloned() {
+            app_platform_state = app_platform_state.with_data_router(
+                data_router,
+                Arc::new(mqtt_client),
+            );
+        }
+        let app_platform_state = Arc::new(app_platform_state);
         let app_platform_service = AppPlatformService::new(Arc::clone(&app_platform_state));
         let socket_path = state.config().app_platform.socket_path.clone();
 

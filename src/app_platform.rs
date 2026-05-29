@@ -11,10 +11,12 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use agent_store::{AppHealthReportRecord, AppSessionRecord, StateStore};
 
+use crate::config_manager::{ConfigManager, ConfigScope};
+use crate::data_router::{AsyncPublish, DataRouter};
 use crate::grpc::app::{
     app_platform_server::{AppPlatform, AppPlatformServer},
     ConfigUpdate, DataMessage, GetConfigRequest, GetConfigResponse, HealthReport, HealthResponse,
@@ -22,6 +24,8 @@ use crate::grpc::app::{
     RegisterAppRequest, RegisterAppResponse, SubscribeDataRequest, UnregisterAppRequest,
     UnregisterAppResponse, WatchConfigRequest,
 };
+use crate::health_evaluator::{HealthEvaluator, HealthStatus};
+use crate::mqtt::MqttClient;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -57,6 +61,10 @@ pub struct AppPlatformState {
     device_id: String,
     store: Mutex<StateStore>,
     session_duration: Duration,
+    data_router: Option<Arc<DataRouter>>,
+    config_manager: Option<Arc<ConfigManager>>,
+    health_evaluator: Option<Arc<HealthEvaluator>>,
+    app_data_publisher: Option<Arc<dyn DynAppDataPublisher>>,
 }
 
 impl AppPlatformState {
@@ -65,7 +73,36 @@ impl AppPlatformState {
             device_id,
             store: Mutex::new(store),
             session_duration: Duration::from_secs(3600),
+            data_router: None,
+            config_manager: None,
+            health_evaluator: None,
+            app_data_publisher: None,
         }
+    }
+
+    pub fn with_session_duration(mut self, session_duration: Duration) -> Self {
+        self.session_duration = session_duration;
+        self
+    }
+
+    pub fn with_data_router(
+        mut self,
+        data_router: Arc<DataRouter>,
+        publisher: Arc<dyn DynAppDataPublisher>,
+    ) -> Self {
+        self.data_router = Some(data_router);
+        self.app_data_publisher = Some(publisher);
+        self
+    }
+
+    pub fn with_config_manager(mut self, config_manager: Arc<ConfigManager>) -> Self {
+        self.config_manager = Some(config_manager);
+        self
+    }
+
+    pub fn with_health_evaluator(mut self, health_evaluator: Arc<HealthEvaluator>) -> Self {
+        self.health_evaluator = Some(health_evaluator);
+        self
     }
 
     fn validate_session(&self, app_id: &str, token: &str) -> Result<(), Status> {
@@ -85,6 +122,27 @@ impl AppPlatformState {
             return Err(Status::unauthenticated("session expired"));
         }
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+pub trait DynAppDataPublisher: Send + Sync {
+    async fn publish_app_data(&self, topic: String, payload: Vec<u8>) -> Result<()>;
+}
+
+#[async_trait::async_trait]
+impl DynAppDataPublisher for MqttClient {
+    async fn publish_app_data(&self, topic: String, payload: Vec<u8>) -> Result<()> {
+        MqttClient::publish_app_data(self, topic, payload).await
+    }
+}
+
+impl<T> AsyncPublish for Arc<T>
+where
+    T: DynAppDataPublisher + ?Sized,
+{
+    async fn publish(&self, topic: String, payload: Vec<u8>) -> Result<()> {
+        self.publish_app_data(topic, payload).await
     }
 }
 
@@ -206,6 +264,12 @@ impl AppPlatform for AppPlatformService {
             .insert_health_report(&record)
             .map_err(|e| Status::internal(e.to_string()))?;
 
+        if let Some(evaluator) = self.state.health_evaluator.as_ref() {
+            evaluator
+                .report(&req.app_id, HealthStatus::from(req.status))
+                .await;
+        }
+
         info!(
             app_id = %req.app_id,
             status = ?req.status,
@@ -229,7 +293,20 @@ impl AppPlatform for AppPlatformService {
             "Data published"
         );
 
-        // TODO(W2.4): route through DataRouter to MQTT
+        if let (Some(router), Some(publisher)) = (
+            self.state.data_router.as_ref(),
+            self.state.app_data_publisher.as_ref(),
+        ) {
+            router
+                .publish_uplink(
+                    &req.app_id,
+                    &req.topic,
+                    req.payload,
+                    Arc::clone(publisher),
+                )
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+        }
         let message_id = format!("msg_{}", now_unix_ms());
 
         Ok(Response::new(PublishDataResponse {
@@ -250,8 +327,33 @@ impl AppPlatform for AppPlatformService {
         let (tx, rx) = mpsc::channel(16);
         info!(app_id = %req.app_id, keys = ?req.keys, "Config watch started");
 
-        // TODO(W2.5): push real ConfigUpdate events from ConfigManager
-        tokio::spawn(async move { drop(tx) });
+        if let Some(config_manager) = self.state.config_manager.as_ref() {
+            let mut watcher = config_manager.subscribe_app(&req.app_id);
+            let keys = req.keys;
+            tokio::spawn(async move {
+                while let Some(event) = watcher.next_change().await {
+                    if !keys.is_empty() && !keys.iter().any(|key| key == &event.key) {
+                        continue;
+                    }
+                    let change_type = if event.value.is_some() {
+                        "updated".to_string()
+                    } else {
+                        "deleted".to_string()
+                    };
+                    let update = ConfigUpdate {
+                        key: event.key,
+                        value: event.value.unwrap_or_default(),
+                        version: event.version.min(i64::MAX as u64) as i64,
+                        change_type,
+                    };
+                    if tx.send(Ok(update)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        } else {
+            tokio::spawn(async move { drop(tx) });
+        }
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }
@@ -268,8 +370,28 @@ impl AppPlatform for AppPlatformService {
         let (tx, rx) = mpsc::channel(16);
         info!(app_id = %req.app_id, topics = ?req.topics, "Data subscription started");
 
-        // TODO(W2.4): push real DataMessage events from DataRouter
-        tokio::spawn(async move { drop(tx) });
+        if let Some(router) = self.state.data_router.as_ref() {
+            let mut downlink_rx = router.downlink_registry().subscribe(&req.app_id);
+            let topics = req.topics;
+            tokio::spawn(async move {
+                while let Some((topic, payload)) = downlink_rx.recv().await {
+                    if !topics.is_empty() && !topics.iter().any(|filter| filter == &topic) {
+                        continue;
+                    }
+                    let msg = DataMessage {
+                        topic,
+                        payload,
+                        timestamp: now_unix_ms() / 1000,
+                        metadata: HashMap::new(),
+                    };
+                    if tx.send(Ok(msg)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        } else {
+            tokio::spawn(async move { drop(tx) });
+        }
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }
@@ -281,9 +403,25 @@ impl AppPlatform for AppPlatformService {
         let req = request.into_inner();
         self.state.validate_session(&req.app_id, &req.session_token)?;
 
-        // TODO(W2.5): read from ConfigManager
+        let config = self
+            .state
+            .config_manager
+            .as_ref()
+            .map(|manager| {
+                let scope = ConfigScope::App(req.app_id.clone());
+                let snapshot = manager.snapshot(&scope);
+                if req.keys.is_empty() {
+                    snapshot
+                } else {
+                    snapshot
+                        .into_iter()
+                        .filter(|(key, _)| req.keys.iter().any(|wanted| wanted == key))
+                        .collect()
+                }
+            })
+            .unwrap_or_default();
         Ok(Response::new(GetConfigResponse {
-            config: HashMap::new(),
+            config,
             version: 1,
         }))
     }
@@ -313,12 +451,43 @@ impl AppPlatform for AppPlatformService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
+
     use agent_store::StateStore;
+    use tokio_stream::StreamExt;
 
     fn make_service() -> AppPlatformService {
         let store = StateStore::open_in_memory().unwrap();
         let state = Arc::new(AppPlatformState::new("test-device".into(), store));
         AppPlatformService::new(state)
+    }
+
+    #[derive(Default)]
+    struct RecordingPublisher {
+        published: StdMutex<Vec<(String, Vec<u8>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl DynAppDataPublisher for RecordingPublisher {
+        async fn publish_app_data(&self, topic: String, payload: Vec<u8>) -> Result<()> {
+            self.published.lock().unwrap().push((topic, payload));
+            Ok(())
+        }
+    }
+
+    async fn registered_session(
+        svc: &AppPlatformService,
+        name: &str,
+    ) -> RegisterAppResponse {
+        svc.register_app(Request::new(RegisterAppRequest {
+            app_name: name.into(),
+            app_version: "1.0.0".into(),
+            capabilities: vec![],
+            metadata: HashMap::new(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
     }
 
     #[tokio::test]
@@ -410,5 +579,100 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn publish_data_routes_through_data_router() {
+        let store = StateStore::open_in_memory().unwrap();
+        let router = Arc::new(DataRouter::new("tenant-a".into(), "test-device".into()));
+        let publisher = Arc::new(RecordingPublisher::default());
+        let state = Arc::new(
+            AppPlatformState::new("test-device".into(), store)
+                .with_data_router(router, publisher.clone()),
+        );
+        let svc = AppPlatformService::new(state);
+        let session = registered_session(&svc, "router-app").await;
+
+        svc.publish_data(Request::new(PublishDataRequest {
+            app_id: session.app_id,
+            session_token: session.session_token,
+            topic: "metrics".into(),
+            payload: b"ok".to_vec(),
+            metadata: HashMap::new(),
+        }))
+        .await
+        .unwrap();
+
+        let published = publisher.published.lock().unwrap();
+        assert_eq!(published.len(), 1);
+        assert!(published[0].0.starts_with("tenant-a/test-device/apps/router-app_"));
+        assert!(published[0].0.ends_with("/metrics"));
+        assert_eq!(published[0].1, b"ok");
+    }
+
+    #[tokio::test]
+    async fn get_config_reads_app_scope() {
+        let store = StateStore::open_in_memory().unwrap();
+        let config_manager = ConfigManager::new();
+        let state = Arc::new(
+            AppPlatformState::new("test-device".into(), store)
+                .with_config_manager(Arc::clone(&config_manager)),
+        );
+        let svc = AppPlatformService::new(state);
+        let session = registered_session(&svc, "config-app").await;
+
+        config_manager.set(
+            ConfigScope::App(session.app_id.clone()),
+            "threshold",
+            "42",
+        );
+
+        let resp = svc
+            .get_config(Request::new(GetConfigRequest {
+                app_id: session.app_id,
+                session_token: session.session_token,
+                keys: vec!["threshold".into()],
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.config.get("threshold"), Some(&"42".to_string()));
+    }
+
+    #[tokio::test]
+    async fn subscribe_data_receives_downlink() {
+        let store = StateStore::open_in_memory().unwrap();
+        let router = Arc::new(DataRouter::new("tenant-a".into(), "test-device".into()));
+        let publisher = Arc::new(RecordingPublisher::default());
+        let state = Arc::new(
+            AppPlatformState::new("test-device".into(), store)
+                .with_data_router(Arc::clone(&router), publisher),
+        );
+        let svc = AppPlatformService::new(state);
+        let session = registered_session(&svc, "downlink-app").await;
+
+        let mut stream = svc
+            .subscribe_data(Request::new(SubscribeDataRequest {
+                app_id: session.app_id.clone(),
+                session_token: session.session_token,
+                topics: vec!["cmd".into()],
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        router
+            .downlink_registry()
+            .deliver(&session.app_id, "cmd".into(), b"run".to_vec())
+            .await;
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.topic, "cmd");
+        assert_eq!(msg.payload, b"run");
     }
 }

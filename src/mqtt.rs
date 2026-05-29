@@ -256,6 +256,17 @@ impl MqttClient {
         info!("Published device descriptor for: {}", self.device_id);
         Ok(())
     }
+
+    /// Publish payload application data to an explicit backend topic.
+    pub async fn publish_app_data(&self, topic: String, payload: Vec<u8>) -> Result<()> {
+        self.client
+            .publish(&topic, QoS::AtLeastOnce, false, payload)
+            .await
+            .with_context(|| format!("Failed to publish app data to {topic}"))?;
+
+        debug!(topic, "Published app data");
+        Ok(())
+    }
 }
 
 fn read_tls_file(path: Option<&std::path::PathBuf>, field: &str) -> Result<Vec<u8>> {

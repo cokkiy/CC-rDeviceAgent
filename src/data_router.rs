@@ -9,7 +9,9 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::{Result, anyhow};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::debug;
+
+use crate::mqtt::MqttClient;
 
 // ── topic mapping ─────────────────────────────────────────────────────────
 
@@ -123,6 +125,12 @@ impl DataRouter {
 #[allow(async_fn_in_trait)]
 pub trait AsyncPublish {
     async fn publish(&self, topic: String, payload: Vec<u8>) -> Result<()>;
+}
+
+impl AsyncPublish for MqttClient {
+    async fn publish(&self, topic: String, payload: Vec<u8>) -> Result<()> {
+        self.publish_app_data(topic, payload).await
+    }
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::warn;
 
 // ── health status ──────────────────────────────────────────────────────────
 
