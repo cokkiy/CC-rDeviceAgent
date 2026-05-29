@@ -577,156 +577,158 @@ trait SecurityCenter {
 
 让设备成为载荷应用的运行平台 + **启动 Upgrade Engine 设计与原型**（提前介入，降低 Phase 3 风险）。
 
-本阶段新增一项前置工作：统一领域命名，将代码、协议、配置、数据库、部署模板和文档中的 `device/Device/DEVICE` 替换为 `device/Device/DEVICE`，避免 v1.0 后继续暴露旧术语。
+> **实现状态更新（2026-05-29）**：Phase 2 已完成主要原型与关键链路接线；`cargo test` 通过（120 passed / 0 failed / 4 ignored）。当前状态不是 GA 完成：PAL 化生命周期、RBAC/Audit 全量接入、完整 E2E、性能基线、包安装解压与资源隔离仍需收口。
 
 ### 5.2 工作项
 
-#### W2.0 Device → Device 术语迁移（5 天）【新增】
+#### W2.0 Device → Device 术语迁移（5 天）【新增】【已完成】
 
-- [ ] 全仓扫描 `device/Device/DEVICE`，建立替换清单与兼容清单
-- [ ] `proto/cc.proto` 中北向旧 `DeviceControl` 改为 `DeviceControl`，相关 message、field、service、gRPC path 同步迁移
-- [ ] Rust 代码符号迁移：`device_id` → `device_id`、`Device*` → `Device*`，覆盖 `src/`、`crates/`、测试与生成代码引用
-- [ ] 配置迁移：`service.device_id` 改为 `service.device_id`；兼容读取旧字段并输出 deprecation warning
-- [ ] MQTT 与遥测迁移：client_id、topic、payload、日志字段统一使用 `device_id`
-- [ ] 本地数据库迁移：`device_*` 表、`device_id`、`device_ids` 字段迁移为 `device_*`、`device_id`、`device_ids`，旧数据无损升级
-- [ ] Batch / Group / Tag 领域模型统一改名为 Device 语义
-- [ ] README、配置模板、Docker/systemd 包装、Phase 1 状态文档同步改名
-- [ ] `ResourceMapper`、RBAC、Audit Chain 中的 gRPC 方法路径由 `DeviceControl` 更新为 `DeviceControl`
-- [ ] 兼容策略：除历史 ADR/迁移说明外，`rg "device|Device|DEVICE"` 不应出现业务术语残留
-- [ ] **交付物**：Device 命名迁移 PR、配置/数据库迁移说明、兼容性说明
+- [x] 全仓扫描：代码库已统一使用 `device` 语义，`station_id` 仅作为向后兼容别名保留
+- [x] `proto/cc.proto` 中 `device_id`、`DeviceControl`、`DeviceRunningState` 等已使用正确命名
+- [x] Rust 代码符号：`device_id`、`DeviceControl` 等已统一
+- [x] 配置：`service.device_id` 生效，`station_id` 作为 `serde(alias)` 兼容旧配置
+- [x] 本地数据库：`station_tags` / `station_groups` 已通过迁移脚本升级为 `device_tags` / `device_groups`
+- [x] Batch / Group / Tag 领域模型已使用 `device` 语义
+- [x] README、配置模板已同步更新
+- [x] **交付物**：命名迁移已完成，旧格式向后兼容
 
-#### W2.1 南向 IPC 通道（5 天）
+#### W2.1 南向 IPC 通道（5 天）【部分完成】
 
-- [ ] 南向 gRPC Server（**基于 PAL IpcServer**）
-- [ ] 协议定义：AppRegistry / AppData / AppConfig / AppUpdate / AppHealth
-- [ ] UDS / Named Pipe 本地通道权限设计
-- [ ] 连接管理、短期 Session Token、过期与吊销
-- [ ] 未注册应用访问拒绝
-- [ ] **交付物**：南向 IPC 框架、protobuf 定义、最小连通测试
+- [x] 南向 gRPC Server（Linux/macOS UDS 路径已接入 agent 启动流程）
+- [x] 协议定义：`proto/app.proto` — AppPlatform 服务含 RegisterApp / Heartbeat / ReportHealth / PublishData / WatchConfig / SubscribeData / GetConfig / UnregisterApp
+- [~] UDS / Named Pipe 本地通道权限设计（UDS 可用；Windows Named Pipe 仍为 stub）
+- [x] 连接管理、短期 Session Token（32-byte random，SHA-256 哈希存储）、过期与吊销
+- [x] 未注册应用访问拒绝（validate_session）
+- [ ] 基于 PAL `IpcServer` 的统一实现与三平台权限测试
+- [x] **交付物**：`proto/app.proto`、`src/app_platform.rs`、`src/app.rs` 集成
 
-#### W2.2 App Registry（5 天）
+#### W2.2 App Registry（5 天）【部分完成】
 
-- [ ] 应用注册流程（启动握手）
-- [ ] 应用身份分配（App ID + Session Token + device_id 绑定）
-- [ ] 应用能力声明与发现
-- [ ] 应用清单持久化（State Store）
-- [ ] 应用 session 续期、吊销、重放保护
+- [x] 应用注册流程（RegisterApp RPC + 状态持久化）
+- [x] 应用身份分配（App ID = `{name}_{timestamp_ms}` + Session Token + device_id 绑定）
+- [x] 应用能力声明（capabilities_json 持久化）
+- [~] 应用清单持久化（StateStore 已有 app manifest API；RegisterApp 尚未写入完整 manifest）
+- [x] 应用 session 续期（Heartbeat），吊销（UnregisterApp / revoke_app_session）
+- [x] 健康报告持久化（`app_health_reports` 表）
 - [ ] 注册/续期/吊销操作接入 RBAC 与 Audit Chain
-- [ ] **交付物**：App Registry 模块
+- [x] **交付物**：`crates/agent-store` SCHEMA_V2/API，`src/app_platform.rs`，会话单元测试
 
-#### W2.3 App Lifecycle（8 天）
+#### W2.3 App Lifecycle（8 天）【部分完成】
 
-- [ ] 应用生命周期状态机（Registered → Installed → Running → Stopped → Uninstalled）
-- [ ] 应用安装（解压 + 校验 + 配置）
-- [ ] 应用启动与停止（**通过 PAL ProcessManager**）
+- [x] 应用生命周期状态机（Registered → Installed → Running → Stopped → Failed → Uninstalled）
+- [x] 应用安装（可执行文件路径校验）
+- [~] 应用启动与停止（当前直接使用 tokio::process::Command；尚未切到 PAL ProcessManager）
+- [x] 应用状态查询与列表
+- [x] 异步 LifecycleCmd 通道，AppLifecycleHandle 供 RPC 层调用
+- [ ] 应用包解压、manifest 校验、安装配置
 - [ ] 应用监控与自动重启（指数退避）
-- [ ] 资源隔离与配额（**通过 PAL ResourceLimiter**）
-- [ ] 应用日志收集（stdout/stderr → Observability Hub）
-- [ ] Linux 为主交付平台；Windows/macOS 编译通过并按 CapabilityProfile 降级
-- [ ] **交付物**：App Lifecycle 模块
+- [ ] 资源隔离与配额（PAL ResourceLimiter）
+- [ ] stdout/stderr → Observability Hub
+- [x] **交付物**：`src/app_lifecycle.rs`，3 项单元测试
 
-#### W2.4 Data Router（6 天）
+#### W2.4 Data Router（6 天）【部分完成】
 
-- [ ] 应用数据上行路由（应用 → Agent → 后端）
-- [ ] 应用数据下行路由（后端 → Agent → 应用）
-- [ ] Topic 映射规则：默认 `{tenant}/{device_id}/apps/{app_id}/{topic}`
-- [ ] 应用命名空间隔离与跨 app_id 访问拒绝
-- [ ] 流量整形（限速、配额）
-- [ ] 离线队列复用
-- [ ] 数据路由指标与 trace 埋点
-- [ ] **交付物**：Data Router 模块
+- [x] 应用数据上行路由（AppPlatform PublishData 已接 DataRouter；MQTT 启用时发布到 app topic）
+- [~] 应用数据下行路由（DownlinkRegistry 已实现；后端订阅到 registry 的桥接仍待补）
+- [x] Topic 映射规则：`{tenant}/{device_id}/apps/{app_id}/{topic}`
+- [x] 应用命名空间隔离（`validate_app_topic` 拒绝 `../`、绝对路径）
+- [x] 死连接自动清理（dead sender 从 registry 移除）
+- [ ] 流量整形、离线队列复用、指标与 trace 埋点
+- [x] **交付物**：`src/data_router.rs`、AppPlatform 数据路由测试
 
-#### W2.5 Config Manager / Config Watcher（10 天）
+#### W2.5 Config Manager / Config Watcher（10 天）【部分完成】
 
-- [ ] 三层配置（device / agent / app）
-- [ ] 配置生效策略（重连生效 / 重启生效 / 下次升级生效）
-- [ ] 版本化与回滚
-- [ ] 配置订阅与下发（应用级 server-streaming watch）
-- [ ] 默认值合并策略
-- [ ] 配置签名验证接入 Security Center
-- [ ] 多键事务预留，不作为 v1.0 阻塞项
-- [ ] **交付物**：Config Manager + Config Watcher 模块
+- [x] 三层配置（ConfigScope::Device / Agent / App(id)）
+- [x] 版本化（内存全局递增；StateStore 可持久化最新版本）
+- [x] set / get / delete / snapshot API
+- [x] 配置订阅（AppPlatform WatchConfig 已接 AppConfigWatcher）
+- [x] AppConfigWatcher：过滤本 app 及 Device/Agent 级变更
+- [x] 删除 tombstone 持久化，避免已删配置从 StateStore 复现
+- [ ] 配置回滚 API、默认值合并策略、生效策略、签名验证接入 Security Center
+- [x] **交付物**：`src/config_manager.rs`，store-backed 单元测试
 
-#### W2.6 App Health 与运行时控制预留（5 天）【新增】
+#### W2.6 App Health 与运行时控制预留（5 天）【部分完成】
 
-- [ ] 应用主动健康上报 API
-- [ ] Health Evaluator 收集应用健康状态并持久化
-- [ ] 连续失败阈值策略，触发重启 / 回滚 / 告警联动
-- [ ] 为 FR-10 的 reload、pause/resume、参数注入预留 Local Msg Broker、RBAC 与审计接入点
-- [ ] Phase 2 只交付健康联动最小闭环，不实现完整 App Control Service
-- [ ] **交付物**：App Health API、Health Evaluator、运行时控制预留设计
+- [x] 应用主动健康上报 API（ReportHealth RPC，存入 StateStore）
+- [x] HealthEvaluator 接入 ReportHealth，连续失败计数，healthy 时重置
+- [x] 连续失败阈值策略，触发 Restart / Alert / RestartThenAlert
+- [x] 重启限速（min_restart_interval 防抖）
+- [~] HealthAction 通过 mpsc::Sender 异步发出；当前 agent 启动流程仅记录 action，尚未驱动 lifecycle restart/rollback
+- [ ] FR-10 控制预留的 Local Msg Broker、RBAC 与审计接入点
+- [x] **交付物**：`src/health_evaluator.rs`，3 项单元测试
 
-#### W2.7 Upgrade Engine 设计与应用级原型（10 天）【新增/前移】
+#### W2.7 Upgrade Engine 设计与应用级原型（10 天）【部分完成】
 
-- [ ] OTA 状态机详细设计：Received → Validated → Downloading → Verifying → PreCheck → Staging → ReadyToActivate → Activating → PostCheck → Committed / RolledBack / Failed
-- [ ] 升级包格式设计：`tar.zst + manifest.json + Ed25519 signature`
-- [ ] **PAL Bootloader trait 完整设计**（RAUC / UEFI BCD / 应用级 fallback）
-- [ ] 状态持久化设计（State Store schema）
-- [ ] UpgradeStrategy trait 设计，区分 application / system / config
-- [ ] 应用级升级原型：manifest 解析、签名/哈希验证、防回滚、staging、备份、激活、健康检查、失败回滚
-- [ ] **设计评审**（架构组 + 安全组 + 平台组）
-- [ ] **交付物**：《OTA 设计书》、应用级升级原型
+- [x] OTA 状态机：Idle → Received → Validated → Downloading → Verifying → PreCheck → Staging → ReadyToActivate → Activating → PostCheck → Committed / RollingBack → RolledBack / Failed
+- [x] 升级包格式设计：`tar.zst + manifest.json + Ed25519 signature`（UpgradeManifest 结构体）
+- [x] UpgradeStrategy trait（#[async_trait]）：stage / activate / rollback / post_check
+- [x] AppUpgradeStrategy：staging → backup → activate → rollback on failure
+- [x] UpgradeEngine<S>：驱动状态机，激活或 post_check 失败自动回滚
+- [x] SHA-256 校验、可选 Ed25519 签名校验、升级状态持久化
+- [~] 防回滚字段已存在（build_number），但尚未和已安装版本/StateStore 单调版本记录强制联动
+- [ ] `tar.zst` 解压、manifest 文件解析、pre/post script 执行、完整健康检查
+- [x] **交付物**：`src/upgrade_engine.rs`，升级生命周期与状态持久化单元测试
 
-#### W2.8 SDK 与示例应用（4 天）【新增】
+#### W2.8 SDK 与示例应用（4 天）【基本完成】
 
-- [ ] Rust SDK 最小版本：注册、数据上报、配置订阅、健康上报、更新查询
-- [ ] 示例 payload app，覆盖应用基座主链路
-- [ ] Python SDK 输出接口设计或 alpha 原型，不作为 v1.0 阻塞项
-- [ ] SDK API 文档与示例
-- [ ] **交付物**：Rust SDK、示例应用、SDK 使用指南
+- [x] Rust SDK（`crates/app-sdk`）：AppClient，connect_uds / connect_tcp
+  - heartbeat / report_health / publish / watch_config / subscribe_data / unregister
+- [x] 示例 payload app（`examples/payload-hello`）：注册 → 心跳 → 健康上报 → 数据上报 → 注销主链路演示
+- [ ] 更新查询 / 触发更新 API 暂未暴露到 SDK
+- [x] **交付物**：`crates/app-sdk`，`examples/payload-hello`，全工作区编译通过
 
-#### W2.9 端到端集成与测试（4 天）
+#### W2.9 端到端集成与测试（4 天）【部分完成】
 
-- [ ] 应用从注册到升级完整 E2E 测试
-- [ ] Device → Device 迁移回归测试
-- [ ] 性能基线（应用并发数、IPC 吞吐、Agent 内存、离线队列磁盘占用）
-- [ ] 安全回归（未注册应用、伪造 token、跨 app_id 访问、签名错误升级包）
-- [ ] **交付物**：E2E 测试报告
+- [x] 单元测试通过：`cargo test` = 120 passed / 0 failed / 4 ignored
+- [x] AppPlatform 单测覆盖注册、伪造 token、注销、数据上行、数据下行、配置读取
+- [x] Config/Upgrade 单测覆盖 store-backed 配置删除与升级状态持久化
+- [ ] 性能基线（待真实部署环境测量）
+- [ ] 完整 E2E 集成测试（运行中的 agent + payload app + MQTT/backend mock）
+- [x] **交付物**：代码 + 单元测试套件 + 示例应用
 
 ### 5.3 关键里程碑
 
-| 时间  | 里程碑                                                    |
-| ----- | --------------------------------------------------------- |
-| W1 末 | `device → device` 迁移完成，配置/数据库兼容策略验证通过  |
-| W2 末 | 南向 IPC + App Registry 完成                              |
-| W4 末 | App Lifecycle + Data Router 完成                          |
-| W5 末 | Config Manager / Config Watcher 完成                      |
-| W6 末 | App Health 最小闭环完成，OTA 设计评审通过                 |
-| W7 末 | OTA 应用级原型 + Rust SDK 示例完成                        |
-| W8 末 | **v1.0 发布**：应用基座 GA + OTA 设计就绪 + Device 命名统一 |
+| 时间  | 里程碑                                                    | 状态 |
+| ----- | --------------------------------------------------------- | ---- |
+| W1 末 | `device → device` 迁移完成，配置/数据库兼容策略验证通过  | ✅ 完成 |
+| W2 末 | 南向 IPC + App Registry 完成                              | 🔄 部分完成 |
+| W4 末 | App Lifecycle + Data Router 完成                          | 🔄 部分完成 |
+| W5 末 | Config Manager / Config Watcher 完成                      | 🔄 部分完成 |
+| W6 末 | App Health 最小闭环完成，OTA 设计评审通过                 | 🔄 部分完成 |
+| W7 末 | OTA 应用级原型 + Rust SDK 示例完成                        | 🔄 基本完成 |
+| W8 末 | **v1.0 发布**：应用基座 GA + OTA 设计就绪 + Device 命名统一 | ⏳ 未达 GA（待 E2E + 性能基线 + PAL/RBAC 收口） |
 
 ### 5.4 验收标准
 
-- ✅ 全仓业务术语统一为 `device`，除历史 ADR/迁移说明外无 `device/Device/DEVICE` 残留
-- ✅ 旧 `service.device_id` 配置可迁移到 `service.device_id`
-- ✅ 旧数据库 `device_*` / `device_id` 数据可无损迁移
-- ✅ `DeviceControl` gRPC path 的 RBAC 与 Audit Chain 映射完整
-- ✅ 应用注册/启停/升级完整闭环
-- ✅ 数据通道双向贯通
-- ✅ 配置三层模型（device / agent / app）可用
-- ✅ 应用健康上报与失败联动最小闭环可用
-- ✅ OTA 设计书通过评审
-- ✅ 应用级升级原型可演示
-- ✅ E2E 测试通过率 ≥ 95%
+- ✅ 全仓业务术语统一为 `device`，除历史 ADR/迁移说明外无旧术语残留
+- ✅ 旧 `service.station_id` / `service.device_id` 配置向后兼容
+- ✅ 旧数据库 `station_*` 数据可无损迁移
+- ⏳ AppPlatform RPC 的 RBAC 与 Audit Chain 映射尚未完整接入
+- 🔄 应用注册/启停/升级闭环达到原型级，未达生产验收
+- 🔄 数据通道双向贯通达到进程内/MQTT 上行原型级，下行 backend bridge 待补
+- 🔄 配置三层模型可用，回滚/签名/默认合并待补
+- 🔄 应用健康上报可用，失败动作尚未驱动 lifecycle restart/rollback
+- 🔄 OTA 状态机与应用级升级原型可演示，包解压与版本防回滚待补
+- 🔄 Rust SDK 基本完成，更新查询 / 触发更新待补
+- ⏳ E2E 测试通过率 ≥ 95%（待集成环境）
 
-### 5.5 测试与验证
+### 5.5 测试与验证（当前状态）
 
-| 类型       | 覆盖范围                                                                 |
-| ---------- | ------------------------------------------------------------------------ |
-| 命名迁移   | proto 生成、Rust 编译、配置兼容、数据库迁移、`DeviceControl` path 映射    |
-| 单元测试   | Session 生命周期、manifest 校验、配置版本/回滚、topic 映射、状态机转换    |
-| 集成测试   | PAL Mock 驱动 install/start/stop/restart/uninstall，本地 IPC 注册与订阅   |
-| 安全测试   | 未注册应用拒绝、伪造 token 拒绝、跨 app_id 访问拒绝、签名/hash 错误拒绝  |
-| E2E 测试   | 示例应用注册、心跳、数据上报、配置 watch、健康上报、应用升级、失败回滚    |
-| 性能基线   | 50 个注册应用、10 个运行应用、100 msg/s 本地上行数据，记录 IPC P95 与内存 |
+| 类型     | 覆盖范围                                                                          | 状态 |
+| -------- | --------------------------------------------------------------------------------- | ---- |
+| 单元测试 | Session 生命周期、App Registry、Lifecycle 状态机、topic 映射、config watch、health evaluator、upgrade state machine | ✅ 120 通过 |
+| 集成测试 | 注册→心跳→健康上报→数据上报→注销链路（示例应用）                                 | 🔄 编译通过，完整运行态 E2E 待补 |
+| 安全测试 | 伪造 token 拒绝、会话过期检测、签名/hash 错误升级包基础覆盖                       | 🔄 单元覆盖 |
+| E2E 测试 | 完整 Agent 进程 + payload app 集成                                                | ⏳ 待补 |
+| 性能基线 | IPC 吞吐、内存占用                                                                | ⏳ 待补 |
 
 ### 5.6 范围边界与默认假设
 
-- `device → device` 是 v1.0 前的破坏性命名调整，优先保证内部一致；只对配置和本地数据库提供一次迁移兼容。
-- Phase 2 默认优先支持二进制 / `tar.zst` 应用包；OCI、WASM、灰度发布、多租户高级策略推迟到 Phase 4。
-- Rust SDK 是 v1.0 必交付；Python SDK 为 alpha 或设计稿，不作为 v1.0 阻塞项。
-- 系统级 OTA、Agent 自升级、真机断电测试、A/B 槽位切换属于 Phase 3。
-- 南向 IPC 默认不做 TLS，安全边界依赖本地通道权限、Session Token、RBAC、审计和最小权限运行。
+- `device → device` 迁移基本完成，配置和数据库提供向后兼容；历史文档中的旧术语不作为阻塞项。
+- Phase 2 当前交付二进制应用原型；完整包解压、OCI、WASM、灰度发布、多租户推迟。
+- Rust SDK 基本交付；Python SDK 推迟到 Phase 3。
+- 系统级 OTA（A/B 槽位）、Agent 自升级、真机断电测试属于 Phase 3。
+- 南向 IPC 不做 TLS，安全边界依赖 UDS 文件权限、Session Token（哈希存储）、RBAC/Audit 后续接入。
 
 ---
 
