@@ -84,6 +84,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "app-sdk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hyper-util",
+ "prost",
+ "protoc-bin-vendored",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "asn1-rs"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -320,6 +338,7 @@ dependencies = [
  "agent-telemetry",
  "anyhow",
  "async-stream",
+ "async-trait",
  "base16",
  "chrono",
  "futures-util",
@@ -1348,6 +1367,17 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "payload-hello"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "app-sdk",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "percent-encoding"

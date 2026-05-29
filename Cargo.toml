@@ -13,12 +13,14 @@ members = [
     "crates/agent-telemetry",
     "crates/agent-store",
     "crates/agent-cli",
+    "crates/app-sdk",
     "crates/pal-core",
     "crates/pal-linux",
     "crates/pal-fallback",
     "crates/pal-mock",
     "crates/pal-windows",
     "crates/pal-macos",
+    "examples/payload-hello",
 ]
 resolver = "3"
 
@@ -96,6 +98,7 @@ pal-core = { path = "crates/pal-core" }
 pal-fallback = { path = "crates/pal-fallback" }
 ring = "0.17.14"
 base16 = "0.2"
+async-trait = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

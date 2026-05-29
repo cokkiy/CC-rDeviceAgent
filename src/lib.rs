@@ -5,6 +5,8 @@ pub mod app_platform;
 pub mod batch;
 pub mod config_manager;
 pub mod data_router;
+pub mod health_evaluator;
+pub mod upgrade_engine;
 pub mod batch_store;
 pub mod config;
 pub mod cpu_monitor;
