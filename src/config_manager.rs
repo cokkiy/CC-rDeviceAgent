@@ -4,9 +4,9 @@
 //! Provides versioned storage, rollback, and server-streaming watch.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
-use anyhow::{Result, anyhow};
+use agent_store::{ConfigVersionRecord, StateStore};
 use tokio::sync::broadcast;
 use tracing::{debug, info};
 
@@ -95,6 +95,7 @@ impl Inner {
 pub struct ConfigManager {
     inner: RwLock<Inner>,
     tx: broadcast::Sender<ConfigChangeEvent>,
+    store: Option<Mutex<StateStore>>,
 }
 
 impl ConfigManager {
@@ -103,6 +104,16 @@ impl ConfigManager {
         Arc::new(Self {
             inner: RwLock::new(Inner::new()),
             tx,
+            store: None,
+        })
+    }
+
+    pub fn new_with_store(store: StateStore) -> Arc<Self> {
+        let (tx, _) = broadcast::channel(256);
+        Arc::new(Self {
+            inner: RwLock::new(Inner::new()),
+            tx,
+            store: Some(Mutex::new(store)),
         })
     }
 
@@ -111,6 +122,18 @@ impl ConfigManager {
         let key = key.into();
         let value = value.into();
         let version = self.inner.write().unwrap().set(scope.clone(), key.clone(), value.clone());
+        if let Some(store) = &self.store {
+            let record = ConfigVersionRecord {
+                scope: scope.to_string(),
+                key: key.clone(),
+                version: version.min(i64::MAX as u64) as i64,
+                value_json: serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string()),
+                signature: None,
+            };
+            if let Err(error) = store.lock().unwrap().insert_config_version(&record) {
+                tracing::warn!(scope = %record.scope, key = %record.key, error = %error, "failed to persist config version");
+            }
+        }
         let event = ConfigChangeEvent { scope, key, value: Some(value), version };
         let _ = self.tx.send(event.clone());
         info!(scope = %event.scope, key = %event.key, version, "config set");
@@ -119,11 +142,28 @@ impl ConfigManager {
 
     /// Delete a key from the given scope.
     pub fn delete(&self, scope: &ConfigScope, key: &str) -> bool {
+        let existed = self.get(scope, key).is_some();
         let version = {
             let mut w = self.inner.write().unwrap();
             let removed = w.delete(scope, key);
-            if removed { w.global_version } else { return false }
+            if removed || existed {
+                w.global_version
+            } else {
+                return false;
+            }
         };
+        if let Some(store) = &self.store {
+            let record = ConfigVersionRecord {
+                scope: scope.to_string(),
+                key: key.to_string(),
+                version: version.min(i64::MAX as u64) as i64,
+                value_json: "null".to_string(),
+                signature: None,
+            };
+            if let Err(error) = store.lock().unwrap().insert_config_version(&record) {
+                tracing::warn!(scope = %record.scope, key = %record.key, error = %error, "failed to persist config deletion");
+            }
+        }
         let event = ConfigChangeEvent {
             scope: scope.clone(),
             key: key.to_string(),
@@ -135,15 +175,33 @@ impl ConfigManager {
     }
 
     pub fn get(&self, scope: &ConfigScope, key: &str) -> Option<String> {
+        if let Some(store) = &self.store
+            && let Ok(Some(record)) = store.lock().unwrap().load_latest_config(&scope.to_string(), key)
+        {
+            return decode_config_value(record.value_json);
+        }
         self.inner.read().unwrap().get(scope, key).map(|(v, _)| v)
     }
 
     pub fn get_version(&self, scope: &ConfigScope, key: &str) -> Option<u64> {
+        if let Some(store) = &self.store
+            && let Ok(Some(record)) = store.lock().unwrap().load_latest_config(&scope.to_string(), key)
+        {
+            return u64::try_from(record.version).ok();
+        }
         self.inner.read().unwrap().get(scope, key).map(|(_, v)| v)
     }
 
     /// Snapshot all keys for a scope.
     pub fn snapshot(&self, scope: &ConfigScope) -> HashMap<String, String> {
+        if let Some(store) = &self.store
+            && let Ok(records) = store.lock().unwrap().load_config_scope(&scope.to_string())
+        {
+            return records
+                .into_iter()
+                .filter_map(|record| decode_config_value(record.value_json).map(|value| (record.key, value)))
+                .collect();
+        }
         self.inner
             .read()
             .unwrap()
@@ -173,13 +231,19 @@ impl Default for ConfigManager {
         Self {
             inner: RwLock::new(Inner::new()),
             tx,
+            store: None,
         }
     }
 }
 
-// helper for logging (avoids partial-move after send)
-fn event_scope(e: &ConfigChangeEvent) -> String { e.scope.to_string() }
-fn event_key(e: &ConfigChangeEvent) -> &str { &e.key }
+fn decode_config_value(value_json: String) -> Option<String> {
+    if value_json == "null" {
+        return None;
+    }
+    serde_json::from_str::<String>(&value_json)
+        .ok()
+        .or(Some(value_json))
+}
 
 // ── per-app watcher ───────────────────────────────────────────────────────
 
@@ -276,5 +340,19 @@ mod tests {
         .expect("channel closed");
 
         assert_eq!(ev.key, "threshold");
+    }
+
+    #[test]
+    fn store_backed_manager_persists_latest_values_and_deletes() {
+        let store = StateStore::open_in_memory().unwrap();
+        let mgr = ConfigManager::new_with_store(store);
+        let scope = ConfigScope::App("app-persist".into());
+
+        mgr.set(scope.clone(), "mode", "active");
+        assert_eq!(mgr.get(&scope, "mode"), Some("active".into()));
+
+        assert!(mgr.delete(&scope, "mode"));
+        assert_eq!(mgr.get(&scope, "mode"), None);
+        assert!(!mgr.snapshot(&scope).contains_key("mode"));
     }
 }

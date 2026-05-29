@@ -47,6 +47,30 @@ pub struct FileTransferTaskRecord {
     pub file_sha256: Option<String>,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ConfigVersionRecord {
+    pub scope: String,
+    pub key: String,
+    pub version: i64,
+    pub value_json: String,
+    pub signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct AppManifestRecord {
+    pub app_id: String,
+    pub version: String,
+    pub manifest_json: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct UpgradeStateRecord {
+    pub id: String,
+    pub target_version: String,
+    pub state: String,
+    pub state_json: String,
+}
+
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct AuditEventFilter {
     pub principal: Option<String>,
@@ -492,6 +516,123 @@ impl StateStore {
         Ok(n > 0)
     }
 
+    // ── App Manifests ────────────────────────────────────────────────────────
+
+    pub fn upsert_app_manifest(&self, r: &AppManifestRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO app_manifests(app_id, version, manifest_json)
+             VALUES(?1, ?2, ?3)
+             ON CONFLICT(app_id) DO UPDATE SET
+               version = excluded.version,
+               manifest_json = excluded.manifest_json,
+               updated_at = CURRENT_TIMESTAMP",
+            params![r.app_id, r.version, r.manifest_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_app_manifest(&self, app_id: &str) -> StoreResult<Option<AppManifestRecord>> {
+        self.connection
+            .query_row(
+                "SELECT app_id, version, manifest_json
+                 FROM app_manifests
+                 WHERE app_id = ?1",
+                params![app_id],
+                |row| {
+                    Ok(AppManifestRecord {
+                        app_id: row.get(0)?,
+                        version: row.get(1)?,
+                        manifest_json: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    // ── Config Versions ──────────────────────────────────────────────────────
+
+    pub fn insert_config_version(&self, r: &ConfigVersionRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO config_versions(scope, key, version, value_json, signature)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![r.scope, r.key, r.version, r.value_json, r.signature],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_latest_config(
+        &self,
+        scope: &str,
+        key: &str,
+    ) -> StoreResult<Option<ConfigVersionRecord>> {
+        self.connection
+            .query_row(
+                "SELECT scope, key, version, value_json, signature
+                 FROM config_versions
+                 WHERE scope = ?1 AND key = ?2
+                 ORDER BY version DESC
+                 LIMIT 1",
+                params![scope, key],
+                row_to_config_version,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn load_config_scope(&self, scope: &str) -> StoreResult<Vec<ConfigVersionRecord>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT cv.scope, cv.key, cv.version, cv.value_json, cv.signature
+             FROM config_versions cv
+             JOIN (
+               SELECT key, MAX(version) AS version
+               FROM config_versions
+               WHERE scope = ?1
+               GROUP BY key
+             ) latest ON latest.key = cv.key AND latest.version = cv.version
+             WHERE cv.scope = ?1
+             ORDER BY cv.key ASC",
+        )?;
+        let rows = stmt.query_map(params![scope], row_to_config_version)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+    }
+
+    // ── Upgrade State ────────────────────────────────────────────────────────
+
+    pub fn upsert_upgrade_state(&self, r: &UpgradeStateRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO upgrade_state(id, target_version, state, state_json)
+             VALUES(?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+               target_version = excluded.target_version,
+               state = excluded.state,
+               state_json = excluded.state_json,
+               updated_at = CURRENT_TIMESTAMP",
+            params![r.id, r.target_version, r.state, r.state_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_upgrade_state(&self, id: &str) -> StoreResult<Option<UpgradeStateRecord>> {
+        self.connection
+            .query_row(
+                "SELECT id, target_version, state, state_json
+                 FROM upgrade_state
+                 WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(UpgradeStateRecord {
+                        id: row.get(0)?,
+                        target_version: row.get(1)?,
+                        state: row.get(2)?,
+                        state_json: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
     // ── App Health Reports ───────────────────────────────────────────────────
 
     pub fn insert_health_report(&self, r: &AppHealthReportRecord) -> StoreResult<()> {
@@ -619,6 +760,16 @@ fn row_to_health_report(row: &rusqlite::Row<'_>) -> rusqlite::Result<AppHealthRe
         message: row.get(2)?,
         metrics_json: row.get(3)?,
         reported_at_unix_ms: row.get(4)?,
+    })
+}
+
+fn row_to_config_version(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConfigVersionRecord> {
+    Ok(ConfigVersionRecord {
+        scope: row.get(0)?,
+        key: row.get(1)?,
+        version: row.get(2)?,
+        value_json: row.get(3)?,
+        signature: row.get(4)?,
     })
 }
 
