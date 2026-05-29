@@ -4,11 +4,15 @@
 //! System-level upgrades (A/B slot, bootloader) are Phase 3.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
+use agent_core::security::{KeyRef, verify_ed25519_signature};
+use agent_store::{StateStore, UpgradeStateRecord};
+use ring::digest;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
+use tokio::fs::{self, File};
+use tokio::io::AsyncReadExt;
 use tracing::{info, warn};
 
 // ── upgrade state machine ─────────────────────────────────────────────────
@@ -86,7 +90,7 @@ pub trait UpgradeStrategy: Send + Sync {
 
     async fn rollback(&self, manifest: &UpgradeManifest) -> Result<()>;
 
-    async fn post_check(&self, manifest: &UpgradeManifest) -> Result<()> {
+    async fn post_check(&self, _manifest: &UpgradeManifest) -> Result<()> {
         Ok(()) // default: pass
     }
 }
@@ -108,7 +112,7 @@ impl UpgradeStrategy for AppUpgradeStrategy {
     async fn stage(
         &self,
         manifest: &UpgradeManifest,
-        package_path: &Path,
+        _package_path: &Path,
         staging_dir: &Path,
     ) -> Result<()> {
         // In real code: decompress tar.zst and verify SHA-256.
@@ -198,6 +202,7 @@ pub struct UpgradeEngine<S: UpgradeStrategy> {
     staging_root: PathBuf,
     state: UpgradeState,
     current_manifest: Option<UpgradeManifest>,
+    store: Option<Mutex<StateStore>>,
 }
 
 impl<S: UpgradeStrategy> UpgradeEngine<S> {
@@ -207,6 +212,17 @@ impl<S: UpgradeStrategy> UpgradeEngine<S> {
             staging_root,
             state: UpgradeState::Idle,
             current_manifest: None,
+            store: None,
+        }
+    }
+
+    pub fn new_with_store(strategy: S, staging_root: PathBuf, store: StateStore) -> Self {
+        Self {
+            strategy,
+            staging_root,
+            state: UpgradeState::Idle,
+            current_manifest: None,
+            store: Some(Mutex::new(store)),
         }
     }
 
@@ -216,53 +232,76 @@ impl<S: UpgradeStrategy> UpgradeEngine<S> {
 
     /// Run a full application upgrade lifecycle.
     pub async fn run(&mut self, manifest: UpgradeManifest, package_path: &Path) -> Result<()> {
-        self.state = UpgradeState::Received;
+        self.set_state(UpgradeState::Received);
         self.current_manifest = Some(manifest.clone());
 
         // Validate manifest
-        self.state = UpgradeState::Validated;
+        self.set_state(UpgradeState::Validated);
         validate_manifest(&manifest)?;
 
         // Downloading (already on disk — caller downloaded via FileTransfer)
-        self.state = UpgradeState::Downloading;
+        self.set_state(UpgradeState::Downloading);
 
         // Verify package integrity
-        self.state = UpgradeState::Verifying;
-        verify_package(&manifest, package_path)?;
+        self.set_state(UpgradeState::Verifying);
+        verify_package(&manifest, package_path).await?;
 
         // Pre-check
-        self.state = UpgradeState::PreCheck;
+        self.set_state(UpgradeState::PreCheck);
 
         // Stage
-        self.state = UpgradeState::Staging;
+        self.set_state(UpgradeState::Staging);
         let staging_dir = self.staging_root.join(&manifest.app_id);
         if let Err(e) = self.strategy.stage(&manifest, package_path, &staging_dir).await {
-            self.state = UpgradeState::Failed { reason: e.to_string() };
+            self.set_state(UpgradeState::Failed { reason: e.to_string() });
             return Err(e);
         }
 
         // Activate
-        self.state = UpgradeState::ReadyToActivate;
-        self.state = UpgradeState::Activating;
+        self.set_state(UpgradeState::ReadyToActivate);
+        self.set_state(UpgradeState::Activating);
         if let Err(e) = self.strategy.activate(&manifest, &staging_dir).await {
-            self.state = UpgradeState::RollingBack;
+            self.set_state(UpgradeState::RollingBack);
             let _ = self.strategy.rollback(&manifest).await;
-            self.state = UpgradeState::RolledBack;
+            self.set_state(UpgradeState::RolledBack);
             return Err(e);
         }
 
         // Post-check
-        self.state = UpgradeState::PostCheck;
+        self.set_state(UpgradeState::PostCheck);
         if let Err(e) = self.strategy.post_check(&manifest).await {
-            self.state = UpgradeState::RollingBack;
+            self.set_state(UpgradeState::RollingBack);
             let _ = self.strategy.rollback(&manifest).await;
-            self.state = UpgradeState::RolledBack;
+            self.set_state(UpgradeState::RolledBack);
             return Err(e);
         }
 
-        self.state = UpgradeState::Committed;
+        self.set_state(UpgradeState::Committed);
         info!(app_id = %manifest.app_id, version = %manifest.to_version, "Upgrade committed");
         Ok(())
+    }
+
+    fn set_state(&mut self, state: UpgradeState) {
+        self.state = state;
+        self.persist_state();
+    }
+
+    fn persist_state(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let Some(manifest) = &self.current_manifest else {
+            return;
+        };
+        let record = UpgradeStateRecord {
+            id: manifest.app_id.clone(),
+            target_version: manifest.to_version.clone(),
+            state: self.state.to_string(),
+            state_json: serde_json::to_string(&self.state).unwrap_or_else(|_| "{}".to_string()),
+        };
+        if let Err(error) = store.lock().unwrap().upsert_upgrade_state(&record) {
+            warn!(app_id = %manifest.app_id, error = %error, "failed to persist upgrade state");
+        }
     }
 }
 
@@ -281,13 +320,56 @@ fn validate_manifest(m: &UpgradeManifest) -> Result<()> {
     Ok(())
 }
 
-fn verify_package(m: &UpgradeManifest, package_path: &Path) -> Result<()> {
+async fn verify_package(m: &UpgradeManifest, package_path: &Path) -> Result<()> {
     if !package_path.exists() {
         return Err(anyhow!("package not found: {}", package_path.display()));
     }
-    // TODO: verify SHA-256 and Ed25519 signature via Security Center
-    // Prototype: accept any existing file
+    let digest = sha256_file(package_path).await?;
+    let digest_hex = base16::encode_lower(digest.as_ref());
+    if !m.package_sha256.is_empty() && digest_hex != m.package_sha256.to_ascii_lowercase() {
+        return Err(anyhow!(
+            "package sha256 mismatch: expected {}, got {}",
+            m.package_sha256,
+            digest_hex
+        ));
+    }
+
+    if !m.signature_b64.is_empty() || !m.public_key_b64.is_empty() {
+        if m.signature_b64.is_empty() || m.public_key_b64.is_empty() {
+            return Err(anyhow!("manifest signature and public key must be provided together"));
+        }
+        let signature = decode_base64(&m.signature_b64).context("decode signature_b64")?;
+        let public_key = decode_base64(&m.public_key_b64).context("decode public_key_b64")?;
+        let key_ref = KeyRef::inline_public_key(format!("upgrade:{}", m.app_id), &public_key);
+        verify_ed25519_signature(digest.as_ref(), &signature, &key_ref)
+            .map_err(|e| anyhow!("package signature verification failed: {e}"))?;
+    }
     Ok(())
+}
+
+async fn sha256_file(path: &Path) -> Result<digest::Digest> {
+    let mut file = File::open(path)
+        .await
+        .with_context(|| format!("open package {}", path.display()))?;
+    let mut ctx = digest::Context::new(&digest::SHA256);
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .await
+            .with_context(|| format!("read package {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        ctx.update(&buf[..n]);
+    }
+    Ok(ctx.finish())
+}
+
+fn decode_base64(input: &str) -> Result<Vec<u8>> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    STANDARD.decode(input).map_err(Into::into)
 }
 
 // ── recursive copy helper ─────────────────────────────────────────────────
@@ -314,7 +396,7 @@ mod tests {
     use super::*;
     use std::env;
 
-    fn dummy_manifest(from: &str, to: &str, build: u64) -> UpgradeManifest {
+    fn dummy_manifest(from: &str, to: &str, build: u64, package_sha256: String) -> UpgradeManifest {
         UpgradeManifest {
             app_id: "test-app".into(),
             app_name: "Test App".into(),
@@ -322,7 +404,7 @@ mod tests {
             to_version: to.into(),
             public_key_b64: String::new(),
             signature_b64: String::new(),
-            package_sha256: String::new(),
+            package_sha256,
             build_number: build,
             pre_activate_script: None,
             post_activate_script: None,
@@ -335,8 +417,8 @@ mod tests {
     impl UpgradeStrategy for NoopStrategy {
     async fn stage(
         &self,
-        manifest: &UpgradeManifest,
-        package_path: &Path,
+        _manifest: &UpgradeManifest,
+        _package_path: &Path,
         staging: &Path,
     ) -> Result<()> {
         fs::create_dir_all(staging).await?;
@@ -358,9 +440,15 @@ mod tests {
 
         fs::create_dir_all(&tmp).await.unwrap();
         fs::write(&pkg, b"dummy package").await.unwrap();
+        let digest = sha256_file(&pkg).await.unwrap();
 
         let mut engine = UpgradeEngine::new(NoopStrategy, staging.clone());
-        let manifest = dummy_manifest("1.0.0", "1.1.0", 2);
+        let manifest = dummy_manifest(
+            "1.0.0",
+            "1.1.0",
+            2,
+            base16::encode_lower(digest.as_ref()),
+        );
 
         engine.run(manifest, &pkg).await.unwrap();
         assert_eq!(*engine.state(), UpgradeState::Committed);
@@ -383,6 +471,39 @@ mod tests {
         };
         let res = engine.run(bad, Path::new("/nonexistent")).await;
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn upgrade_state_is_persisted() {
+        let tmp = env::temp_dir().join("cc_upgrade_state_test");
+        let pkg = tmp.join("package.tar.zst");
+        let staging = tmp.join("staging");
+
+        fs::create_dir_all(&tmp).await.unwrap();
+        fs::write(&pkg, b"state package").await.unwrap();
+        let digest = sha256_file(&pkg).await.unwrap();
+
+        let store = StateStore::open_in_memory().unwrap();
+        let mut engine = UpgradeEngine::new_with_store(NoopStrategy, staging, store);
+        let manifest = dummy_manifest(
+            "1.0.0",
+            "1.1.0",
+            2,
+            base16::encode_lower(digest.as_ref()),
+        );
+
+        engine.run(manifest, &pkg).await.unwrap();
+        let stored = engine
+            .store
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .load_upgrade_state("test-app")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.state, "committed");
+        assert_eq!(stored.target_version, "1.1.0");
     }
 
     #[test]

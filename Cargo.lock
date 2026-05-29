@@ -340,6 +340,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "base16",
+ "base64",
  "chrono",
  "futures-util",
  "hostname",

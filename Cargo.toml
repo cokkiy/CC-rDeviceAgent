@@ -98,6 +98,7 @@ pal-core = { path = "crates/pal-core" }
 pal-fallback = { path = "crates/pal-fallback" }
 ring = "0.17.14"
 base16 = "0.2"
+base64 = "0.22"
 async-trait = "0.1"
 
 [target.'cfg(unix)'.dependencies]
