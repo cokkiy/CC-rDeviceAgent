@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use tokio::sync::mpsc;
@@ -332,7 +332,7 @@ async fn do_stop(apps: &mut HashMap<String, AppInstance>, app_id: &str) -> Resul
             use nix::unistd::Pid;
             let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
             // Give it 5 s to exit gracefully, then SIGKILL
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
         }
 
@@ -356,15 +356,16 @@ async fn do_uninstall(apps: &mut HashMap<String, AppInstance>, app_id: &str) -> 
         .ok_or_else(|| anyhow!("unknown app: {}", app_id))?;
 
     // Stop first if running
-    if matches!(inst.state, AppState::Running | AppState::Starting)
-        && let Some(pid) = inst.pid.take()
-    {
+    if matches!(inst.state, AppState::Running | AppState::Starting) {
+        let pid = inst.pid.take();
         #[cfg(unix)]
-        {
+        if let Some(pid) = pid {
             use nix::sys::signal::{Signal, kill};
             use nix::unistd::Pid;
             let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
         }
+        #[cfg(not(unix))]
+        let _ = pid;
     }
 
     inst.state = AppState::Uninstalled;

@@ -40,7 +40,9 @@ mod proto {
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result, anyhow};
+#[cfg(unix)]
+use anyhow::anyhow;
+use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 use tonic::transport::Channel;
 use tracing::info;

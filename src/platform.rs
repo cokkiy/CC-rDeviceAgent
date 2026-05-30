@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 #[cfg(any(target_os = "linux", windows))]
 use pal_core::PlatformBuilder;
 use pal_core::PlatformContext;
@@ -38,7 +38,7 @@ pub fn shutdown() -> Result<()> {
     target_os = "illumos"
 ))]
 pub fn daemonize() -> Result<()> {
-    nix::unistd::daemon(true, false).map_err(|err| anyhow!("daemonize failed: {err}"))
+    nix::unistd::daemon(true, false).map_err(|err| anyhow::anyhow!("daemonize failed: {err}"))
 }
 
 #[cfg(target_os = "macos")]

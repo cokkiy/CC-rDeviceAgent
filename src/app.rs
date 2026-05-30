@@ -225,87 +225,88 @@ pub async fn run(
     );
 
     // Start southbound IPC server for payload applications if enabled
-    let _app_platform_handle = if state.config().app_platform.enabled {
-        let app_platform_store = agent_store::StateStore::open(&store_path)
-            .map_err(|e| anyhow::anyhow!("open state store for app platform: {e}"))?;
-        let config_store = agent_store::StateStore::open(&store_path)
-            .map_err(|e| anyhow::anyhow!("open state store for config manager: {e}"))?;
-        let config_manager = ConfigManager::new_with_store(config_store);
-        let data_router = Arc::new(DataRouter::new(
-            "default".to_string(),
-            state.device_id().to_string(),
-        ));
-        let (health_action_tx, mut health_action_rx) = tokio::sync::mpsc::channel(64);
-        let health_evaluator = HealthEvaluator::new(health_action_tx);
-        tokio::spawn(async move {
-            while let Some(action) = health_action_rx.recv().await {
-                warn!(
-                    app_id = %action.app_id,
-                    action = ?action.action,
-                    failures = action.consecutive_failures,
-                    "App health action emitted"
-                );
+    let _app_platform_handle: Option<tokio::task::JoinHandle<Result<()>>> =
+        if state.config().app_platform.enabled {
+            let app_platform_store = agent_store::StateStore::open(&store_path)
+                .map_err(|e| anyhow::anyhow!("open state store for app platform: {e}"))?;
+            let config_store = agent_store::StateStore::open(&store_path)
+                .map_err(|e| anyhow::anyhow!("open state store for config manager: {e}"))?;
+            let config_manager = ConfigManager::new_with_store(config_store);
+            let data_router = Arc::new(DataRouter::new(
+                "default".to_string(),
+                state.device_id().to_string(),
+            ));
+            let (health_action_tx, mut health_action_rx) = tokio::sync::mpsc::channel(64);
+            let health_evaluator = HealthEvaluator::new(health_action_tx);
+            tokio::spawn(async move {
+                while let Some(action) = health_action_rx.recv().await {
+                    warn!(
+                        app_id = %action.app_id,
+                        action = ?action.action,
+                        failures = action.consecutive_failures,
+                        "App health action emitted"
+                    );
+                }
+            });
+            let mut app_platform_state =
+                AppPlatformState::new(state.device_id().to_string(), app_platform_store)
+                    .with_session_duration(Duration::from_secs(
+                        state.config().app_platform.session_duration_secs.max(1),
+                    ))
+                    .with_config_manager(config_manager)
+                    .with_health_evaluator(health_evaluator);
+            if let Some(mqtt_client) = state.mqtt_client().cloned() {
+                app_platform_state =
+                    app_platform_state.with_data_router(data_router, Arc::new(mqtt_client));
             }
-        });
-        let mut app_platform_state =
-            AppPlatformState::new(state.device_id().to_string(), app_platform_store)
-                .with_session_duration(Duration::from_secs(
-                    state.config().app_platform.session_duration_secs.max(1),
-                ))
-                .with_config_manager(config_manager)
-                .with_health_evaluator(health_evaluator);
-        if let Some(mqtt_client) = state.mqtt_client().cloned() {
-            app_platform_state =
-                app_platform_state.with_data_router(data_router, Arc::new(mqtt_client));
-        }
-        let app_platform_state = Arc::new(app_platform_state);
-        let app_platform_service = AppPlatformService::new(Arc::clone(&app_platform_state));
-        let socket_path = state.config().app_platform.socket_path.clone();
+            let app_platform_state = Arc::new(app_platform_state);
+            let app_platform_service = AppPlatformService::new(Arc::clone(&app_platform_state));
+            let socket_path = state.config().app_platform.socket_path.clone();
 
-        info!(socket_path = %socket_path, "Starting southbound IPC server");
+            info!(socket_path = %socket_path, "Starting southbound IPC server");
 
-        let shutdown_clone = shutdown.clone();
-        Some(tokio::spawn(async move {
-            #[allow(unused_mut)]
-            let mut shutdown_clone = shutdown_clone;
-            #[cfg(unix)]
-            {
-                use tokio::net::UnixListener;
-                use tokio_stream::wrappers::UnixListenerStream;
+            let shutdown_clone = shutdown.clone();
+            Some(tokio::spawn(async move {
+                #[allow(unused_mut)]
+                let mut shutdown_clone = shutdown_clone;
+                #[cfg(unix)]
+                {
+                    use tokio::net::UnixListener;
+                    use tokio_stream::wrappers::UnixListenerStream;
 
-                // Ensure parent directory exists
-                if let Some(parent) = std::path::Path::new(&socket_path).parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
+                    // Ensure parent directory exists
+                    if let Some(parent) = std::path::Path::new(&socket_path).parent() {
+                        let _ = tokio::fs::create_dir_all(parent).await;
+                    }
+
+                    // Remove existing socket file
+                    let _ = tokio::fs::remove_file(&socket_path).await;
+
+                    let uds = UnixListener::bind(&socket_path)
+                        .context("bind Unix socket for app platform")?;
+                    let uds_stream = UnixListenerStream::new(uds);
+
+                    info!(socket_path = %socket_path, "Southbound IPC server listening");
+
+                    Server::builder()
+                        .add_service(app_platform_service.into_server())
+                        .serve_with_incoming_shutdown(uds_stream, async move {
+                            let _ = shutdown_clone.changed().await;
+                        })
+                        .await
+                        .context("run southbound IPC server")
                 }
 
-                // Remove existing socket file
-                let _ = tokio::fs::remove_file(&socket_path).await;
-
-                let uds = UnixListener::bind(&socket_path)
-                    .context("bind Unix socket for app platform")?;
-                let uds_stream = UnixListenerStream::new(uds);
-
-                info!(socket_path = %socket_path, "Southbound IPC server listening");
-
-                Server::builder()
-                    .add_service(app_platform_service.into_server())
-                    .serve_with_incoming_shutdown(uds_stream, async move {
-                        let _ = shutdown_clone.changed().await;
-                    })
-                    .await
-                    .context("run southbound IPC server")
-            }
-
-            #[cfg(windows)]
-            {
-                // TODO: Implement Named Pipe server for Windows
-                anyhow::bail!("Windows Named Pipe support not yet implemented")
-            }
-        }))
-    } else {
-        info!("Southbound IPC server disabled");
-        None
-    };
+                #[cfg(windows)]
+                {
+                    // TODO: Implement Named Pipe server for Windows
+                    anyhow::bail!("Windows Named Pipe support not yet implemented")
+                }
+            }))
+        } else {
+            info!("Southbound IPC server disabled");
+            None
+        };
 
     let mut server = Server::builder();
     if control_tls.enabled {
@@ -1004,27 +1005,28 @@ async fn finalize_upload(path: Option<PathBuf>, file: Option<File>) -> Result<()
             .map_err(status_from_error)?;
     }
 
+    #[cfg(unix)]
     if let Some(path) = path {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::PermissionsExt;
 
-            let mode = if looks_executable(&path).await.unwrap_or(false) {
-                0o777
-            } else {
-                0o666
-            };
+        let mode = if looks_executable(&path).await.unwrap_or(false) {
+            0o777
+        } else {
+            0o666
+        };
 
-            fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
-                .await
-                .with_context(|| format!("set permissions {}", path.display()))
-                .map_err(status_from_error)?;
-        }
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .await
+            .with_context(|| format!("set permissions {}", path.display()))
+            .map_err(status_from_error)?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
 
     Ok(())
 }
 
+#[cfg(unix)]
 async fn looks_executable(path: &Path) -> Result<bool> {
     let extension = path
         .extension()
