@@ -112,12 +112,14 @@ impl HealthEvaluator {
     pub async fn report(&self, app_id: &str, status: HealthStatus) {
         let action_opt = {
             let mut guard = self.apps.lock().unwrap();
-            let entry = guard.entry(app_id.to_string()).or_insert_with(|| AppHealth {
-                consecutive_failures: 0,
-                last_status: HealthStatus::Unknown,
-                last_restart: None,
-                policy: HealthPolicy::default(),
-            });
+            let entry = guard
+                .entry(app_id.to_string())
+                .or_insert_with(|| AppHealth {
+                    consecutive_failures: 0,
+                    last_status: HealthStatus::Unknown,
+                    last_restart: None,
+                    policy: HealthPolicy::default(),
+                });
 
             entry.last_status = status.clone();
 

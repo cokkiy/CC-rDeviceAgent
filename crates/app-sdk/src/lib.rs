@@ -43,12 +43,11 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, anyhow};
 use tokio::sync::mpsc;
 use tonic::transport::Channel;
-use tracing::{debug, info};
+use tracing::info;
 
 use proto::{
-    HeartbeatRequest, HealthReport, PublishDataRequest, RegisterAppRequest, SubscribeDataRequest,
-    UnregisterAppRequest, WatchConfigRequest,
-    app_platform_client::AppPlatformClient,
+    HealthReport, HeartbeatRequest, PublishDataRequest, RegisterAppRequest, SubscribeDataRequest,
+    UnregisterAppRequest, WatchConfigRequest, app_platform_client::AppPlatformClient,
 };
 
 pub use proto::{ConfigUpdate, DataMessage, HealthStatus};
@@ -207,7 +206,10 @@ impl AppClient {
 
     /// Start watching configuration changes.
     /// Returns a channel receiver; each item is a `ConfigUpdate`.
-    pub async fn watch_config(&mut self, keys: Vec<String>) -> Result<mpsc::Receiver<ConfigUpdate>> {
+    pub async fn watch_config(
+        &mut self,
+        keys: Vec<String>,
+    ) -> Result<mpsc::Receiver<ConfigUpdate>> {
         let (tx, rx) = mpsc::channel(64);
         let mut stream = self
             .inner

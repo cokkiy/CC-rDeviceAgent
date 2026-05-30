@@ -104,7 +104,12 @@ impl DataRouter {
     /// Build the full MQTT topic for an uplink message from `app_id`.
     pub fn uplink_topic(&self, app_id: &str, topic: &str) -> Result<String> {
         validate_app_topic(topic)?;
-        Ok(app_uplink_topic(&self.tenant, &self.device_id, app_id, topic))
+        Ok(app_uplink_topic(
+            &self.tenant,
+            &self.device_id,
+            app_id,
+            topic,
+        ))
     }
 
     /// Publish uplink data.  Caller provides the MQTT publish function

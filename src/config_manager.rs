@@ -24,7 +24,7 @@ impl std::fmt::Display for ConfigScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Device => write!(f, "device"),
-            Self::Agent  => write!(f, "agent"),
+            Self::Agent => write!(f, "agent"),
             Self::App(id) => write!(f, "app:{id}"),
         }
     }
@@ -68,17 +68,11 @@ impl Inner {
     }
 
     fn get(&self, scope: &ConfigScope, key: &str) -> Option<(String, u64)> {
-        self.scopes
-            .get(scope)
-            .and_then(|m| m.get(key))
-            .cloned()
+        self.scopes.get(scope).and_then(|m| m.get(key)).cloned()
     }
 
     fn get_all(&self, scope: &ConfigScope) -> HashMap<String, (String, u64)> {
-        self.scopes
-            .get(scope)
-            .cloned()
-            .unwrap_or_default()
+        self.scopes.get(scope).cloned().unwrap_or_default()
     }
 
     fn delete(&mut self, scope: &ConfigScope, key: &str) -> bool {
@@ -121,7 +115,11 @@ impl ConfigManager {
     pub fn set(&self, scope: ConfigScope, key: impl Into<String>, value: impl Into<String>) -> u64 {
         let key = key.into();
         let value = value.into();
-        let version = self.inner.write().unwrap().set(scope.clone(), key.clone(), value.clone());
+        let version = self
+            .inner
+            .write()
+            .unwrap()
+            .set(scope.clone(), key.clone(), value.clone());
         if let Some(store) = &self.store {
             let record = ConfigVersionRecord {
                 scope: scope.to_string(),
@@ -134,7 +132,12 @@ impl ConfigManager {
                 tracing::warn!(scope = %record.scope, key = %record.key, error = %error, "failed to persist config version");
             }
         }
-        let event = ConfigChangeEvent { scope, key, value: Some(value), version };
+        let event = ConfigChangeEvent {
+            scope,
+            key,
+            value: Some(value),
+            version,
+        };
         let _ = self.tx.send(event.clone());
         info!(scope = %event.scope, key = %event.key, version, "config set");
         version
@@ -176,7 +179,10 @@ impl ConfigManager {
 
     pub fn get(&self, scope: &ConfigScope, key: &str) -> Option<String> {
         if let Some(store) = &self.store
-            && let Ok(Some(record)) = store.lock().unwrap().load_latest_config(&scope.to_string(), key)
+            && let Ok(Some(record)) = store
+                .lock()
+                .unwrap()
+                .load_latest_config(&scope.to_string(), key)
         {
             return decode_config_value(record.value_json);
         }
@@ -185,7 +191,10 @@ impl ConfigManager {
 
     pub fn get_version(&self, scope: &ConfigScope, key: &str) -> Option<u64> {
         if let Some(store) = &self.store
-            && let Ok(Some(record)) = store.lock().unwrap().load_latest_config(&scope.to_string(), key)
+            && let Ok(Some(record)) = store
+                .lock()
+                .unwrap()
+                .load_latest_config(&scope.to_string(), key)
         {
             return u64::try_from(record.version).ok();
         }
@@ -199,7 +208,9 @@ impl ConfigManager {
         {
             return records
                 .into_iter()
-                .filter_map(|record| decode_config_value(record.value_json).map(|value| (record.key, value)))
+                .filter_map(|record| {
+                    decode_config_value(record.value_json).map(|value| (record.key, value))
+                })
                 .collect();
         }
         self.inner
@@ -258,11 +269,8 @@ impl AppConfigWatcher {
         loop {
             match self.rx.recv().await {
                 Ok(ev) => {
-                    let relevant = matches!(
-                        &ev.scope,
-                        ConfigScope::Device
-                            | ConfigScope::Agent
-                    ) || matches!(&ev.scope, ConfigScope::App(id) if id == &self.app_id);
+                    let relevant = matches!(&ev.scope, ConfigScope::Device | ConfigScope::Agent)
+                        || matches!(&ev.scope, ConfigScope::App(id) if id == &self.app_id);
                     if relevant {
                         return Some(ev);
                     }
@@ -287,7 +295,10 @@ mod tests {
     fn set_and_get() {
         let mgr = ConfigManager::new();
         mgr.set(ConfigScope::Device, "log_level", "debug");
-        assert_eq!(mgr.get(&ConfigScope::Device, "log_level"), Some("debug".into()));
+        assert_eq!(
+            mgr.get(&ConfigScope::Device, "log_level"),
+            Some("debug".into())
+        );
     }
 
     #[test]
@@ -331,13 +342,10 @@ mod tests {
         // Fire one for our app
         mgr.set(ConfigScope::App("app-42".into()), "threshold", "50");
 
-        let ev = tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            w.next_change(),
-        )
-        .await
-        .expect("timeout")
-        .expect("channel closed");
+        let ev = tokio::time::timeout(std::time::Duration::from_millis(200), w.next_change())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
 
         assert_eq!(ev.key, "threshold");
     }

@@ -6,9 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use anyhow::{Context, Result, anyhow};
 use agent_core::security::{KeyRef, verify_ed25519_signature};
 use agent_store::{StateStore, UpgradeStateRecord};
+use anyhow::{Context, Result, anyhow};
 use ring::digest;
 use serde::{Deserialize, Serialize};
 use tokio::fs::{self, File};
@@ -252,8 +252,14 @@ impl<S: UpgradeStrategy> UpgradeEngine<S> {
         // Stage
         self.set_state(UpgradeState::Staging);
         let staging_dir = self.staging_root.join(&manifest.app_id);
-        if let Err(e) = self.strategy.stage(&manifest, package_path, &staging_dir).await {
-            self.set_state(UpgradeState::Failed { reason: e.to_string() });
+        if let Err(e) = self
+            .strategy
+            .stage(&manifest, package_path, &staging_dir)
+            .await
+        {
+            self.set_state(UpgradeState::Failed {
+                reason: e.to_string(),
+            });
             return Err(e);
         }
 
@@ -336,7 +342,9 @@ async fn verify_package(m: &UpgradeManifest, package_path: &Path) -> Result<()> 
 
     if !m.signature_b64.is_empty() || !m.public_key_b64.is_empty() {
         if m.signature_b64.is_empty() || m.public_key_b64.is_empty() {
-            return Err(anyhow!("manifest signature and public key must be provided together"));
+            return Err(anyhow!(
+                "manifest signature and public key must be provided together"
+            ));
         }
         let signature = decode_base64(&m.signature_b64).context("decode signature_b64")?;
         let public_key = decode_base64(&m.public_key_b64).context("decode public_key_b64")?;
@@ -415,21 +423,21 @@ mod tests {
 
     #[async_trait::async_trait]
     impl UpgradeStrategy for NoopStrategy {
-    async fn stage(
-        &self,
-        _manifest: &UpgradeManifest,
-        _package_path: &Path,
-        staging: &Path,
-    ) -> Result<()> {
-        fs::create_dir_all(staging).await?;
-        Ok(())
-    }
-    async fn activate(&self, _m: &UpgradeManifest, _staging: &Path) -> Result<()> {
-        Ok(())
-    }
-    async fn rollback(&self, _m: &UpgradeManifest) -> Result<()> {
-        Ok(())
-    }
+        async fn stage(
+            &self,
+            _manifest: &UpgradeManifest,
+            _package_path: &Path,
+            staging: &Path,
+        ) -> Result<()> {
+            fs::create_dir_all(staging).await?;
+            Ok(())
+        }
+        async fn activate(&self, _m: &UpgradeManifest, _staging: &Path) -> Result<()> {
+            Ok(())
+        }
+        async fn rollback(&self, _m: &UpgradeManifest) -> Result<()> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
@@ -443,12 +451,7 @@ mod tests {
         let digest = sha256_file(&pkg).await.unwrap();
 
         let mut engine = UpgradeEngine::new(NoopStrategy, staging.clone());
-        let manifest = dummy_manifest(
-            "1.0.0",
-            "1.1.0",
-            2,
-            base16::encode_lower(digest.as_ref()),
-        );
+        let manifest = dummy_manifest("1.0.0", "1.1.0", 2, base16::encode_lower(digest.as_ref()));
 
         engine.run(manifest, &pkg).await.unwrap();
         assert_eq!(*engine.state(), UpgradeState::Committed);
@@ -485,12 +488,7 @@ mod tests {
 
         let store = StateStore::open_in_memory().unwrap();
         let mut engine = UpgradeEngine::new_with_store(NoopStrategy, staging, store);
-        let manifest = dummy_manifest(
-            "1.0.0",
-            "1.1.0",
-            2,
-            base16::encode_lower(digest.as_ref()),
-        );
+        let manifest = dummy_manifest("1.0.0", "1.1.0", 2, base16::encode_lower(digest.as_ref()));
 
         engine.run(manifest, &pkg).await.unwrap();
         let stored = engine
@@ -510,7 +508,10 @@ mod tests {
     fn state_display() {
         assert_eq!(UpgradeState::Committed.to_string(), "committed");
         assert_eq!(
-            UpgradeState::Failed { reason: "disk full".into() }.to_string(),
+            UpgradeState::Failed {
+                reason: "disk full".into()
+            }
+            .to_string(),
             "failed(disk full)"
         );
     }

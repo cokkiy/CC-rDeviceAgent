@@ -18,11 +18,11 @@ use agent_store::{AppHealthReportRecord, AppSessionRecord, StateStore};
 use crate::config_manager::{ConfigManager, ConfigScope};
 use crate::data_router::{AsyncPublish, DataRouter};
 use crate::grpc::app::{
-    app_platform_server::{AppPlatform, AppPlatformServer},
     ConfigUpdate, DataMessage, GetConfigRequest, GetConfigResponse, HealthReport, HealthResponse,
     HeartbeatRequest, HeartbeatResponse, PublishDataRequest, PublishDataResponse,
     RegisterAppRequest, RegisterAppResponse, SubscribeDataRequest, UnregisterAppRequest,
     UnregisterAppResponse, WatchConfigRequest,
+    app_platform_server::{AppPlatform, AppPlatformServer},
 };
 use crate::health_evaluator::{HealthEvaluator, HealthStatus};
 use crate::mqtt::MqttClient;
@@ -185,8 +185,7 @@ impl AppPlatform for AppPlatformService {
             session_token_hash: hash_token(&token),
             capabilities_json: serde_json::to_string(&req.capabilities)
                 .unwrap_or_else(|_| "[]".into()),
-            metadata_json: serde_json::to_string(&req.metadata)
-                .unwrap_or_else(|_| "{}".into()),
+            metadata_json: serde_json::to_string(&req.metadata).unwrap_or_else(|_| "{}".into()),
             device_id: self.state.device_id.clone(),
             registered_at_unix_ms: now,
             expires_at_unix_ms: expires,
@@ -221,7 +220,8 @@ impl AppPlatform for AppPlatformService {
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
         let req = request.into_inner();
-        self.state.validate_session(&req.app_id, &req.session_token)?;
+        self.state
+            .validate_session(&req.app_id, &req.session_token)?;
 
         let now = now_unix_ms();
         let new_exp = now + self.state.session_duration.as_millis() as i64;
@@ -246,14 +246,14 @@ impl AppPlatform for AppPlatformService {
         request: Request<HealthReport>,
     ) -> Result<Response<HealthResponse>, Status> {
         let req = request.into_inner();
-        self.state.validate_session(&req.app_id, &req.session_token)?;
+        self.state
+            .validate_session(&req.app_id, &req.session_token)?;
 
         let record = AppHealthReportRecord {
             app_id: req.app_id.clone(),
             status: format!("{:?}", req.status),
             message: req.message.clone(),
-            metrics_json: serde_json::to_string(&req.metrics)
-                .unwrap_or_else(|_| "{}".into()),
+            metrics_json: serde_json::to_string(&req.metrics).unwrap_or_else(|_| "{}".into()),
             reported_at_unix_ms: now_unix_ms(),
         };
 
@@ -284,7 +284,8 @@ impl AppPlatform for AppPlatformService {
         request: Request<PublishDataRequest>,
     ) -> Result<Response<PublishDataResponse>, Status> {
         let req = request.into_inner();
-        self.state.validate_session(&req.app_id, &req.session_token)?;
+        self.state
+            .validate_session(&req.app_id, &req.session_token)?;
 
         debug!(
             app_id = %req.app_id,
@@ -298,12 +299,7 @@ impl AppPlatform for AppPlatformService {
             self.state.app_data_publisher.as_ref(),
         ) {
             router
-                .publish_uplink(
-                    &req.app_id,
-                    &req.topic,
-                    req.payload,
-                    Arc::clone(publisher),
-                )
+                .publish_uplink(&req.app_id, &req.topic, req.payload, Arc::clone(publisher))
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
         }
@@ -322,7 +318,8 @@ impl AppPlatform for AppPlatformService {
         request: Request<WatchConfigRequest>,
     ) -> Result<Response<Self::WatchConfigStream>, Status> {
         let req = request.into_inner();
-        self.state.validate_session(&req.app_id, &req.session_token)?;
+        self.state
+            .validate_session(&req.app_id, &req.session_token)?;
 
         let (tx, rx) = mpsc::channel(16);
         info!(app_id = %req.app_id, keys = ?req.keys, "Config watch started");
@@ -365,7 +362,8 @@ impl AppPlatform for AppPlatformService {
         request: Request<SubscribeDataRequest>,
     ) -> Result<Response<Self::SubscribeDataStream>, Status> {
         let req = request.into_inner();
-        self.state.validate_session(&req.app_id, &req.session_token)?;
+        self.state
+            .validate_session(&req.app_id, &req.session_token)?;
 
         let (tx, rx) = mpsc::channel(16);
         info!(app_id = %req.app_id, topics = ?req.topics, "Data subscription started");
@@ -401,7 +399,8 @@ impl AppPlatform for AppPlatformService {
         request: Request<GetConfigRequest>,
     ) -> Result<Response<GetConfigResponse>, Status> {
         let req = request.into_inner();
-        self.state.validate_session(&req.app_id, &req.session_token)?;
+        self.state
+            .validate_session(&req.app_id, &req.session_token)?;
 
         let config = self
             .state
@@ -420,10 +419,7 @@ impl AppPlatform for AppPlatformService {
                 }
             })
             .unwrap_or_default();
-        Ok(Response::new(GetConfigResponse {
-            config,
-            version: 1,
-        }))
+        Ok(Response::new(GetConfigResponse { config, version: 1 }))
     }
 
     async fn unregister_app(
@@ -431,7 +427,8 @@ impl AppPlatform for AppPlatformService {
         request: Request<UnregisterAppRequest>,
     ) -> Result<Response<UnregisterAppResponse>, Status> {
         let req = request.into_inner();
-        self.state.validate_session(&req.app_id, &req.session_token)?;
+        self.state
+            .validate_session(&req.app_id, &req.session_token)?;
 
         self.state
             .store
@@ -475,10 +472,7 @@ mod tests {
         }
     }
 
-    async fn registered_session(
-        svc: &AppPlatformService,
-        name: &str,
-    ) -> RegisterAppResponse {
+    async fn registered_session(svc: &AppPlatformService, name: &str) -> RegisterAppResponse {
         svc.register_app(Request::new(RegisterAppRequest {
             app_name: name.into(),
             app_version: "1.0.0".into(),
@@ -605,7 +599,11 @@ mod tests {
 
         let published = publisher.published.lock().unwrap();
         assert_eq!(published.len(), 1);
-        assert!(published[0].0.starts_with("tenant-a/test-device/apps/router-app_"));
+        assert!(
+            published[0]
+                .0
+                .starts_with("tenant-a/test-device/apps/router-app_")
+        );
         assert!(published[0].0.ends_with("/metrics"));
         assert_eq!(published[0].1, b"ok");
     }
@@ -621,11 +619,7 @@ mod tests {
         let svc = AppPlatformService::new(state);
         let session = registered_session(&svc, "config-app").await;
 
-        config_manager.set(
-            ConfigScope::App(session.app_id.clone()),
-            "threshold",
-            "42",
-        );
+        config_manager.set(ConfigScope::App(session.app_id.clone()), "threshold", "42");
 
         let resp = svc
             .get_config(Request::new(GetConfigRequest {

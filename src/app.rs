@@ -15,8 +15,8 @@ use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
-use crate::config::AppConfig;
 use crate::app_platform::{AppPlatformService, AppPlatformState};
+use crate::config::AppConfig;
 use crate::config_manager::ConfigManager;
 use crate::data_router::DataRouter;
 use crate::grpc::cc::{
@@ -247,20 +247,16 @@ pub async fn run(
                 );
             }
         });
-        let mut app_platform_state = AppPlatformState::new(
-            state.device_id().to_string(),
-            app_platform_store,
-        )
-        .with_session_duration(Duration::from_secs(
-            state.config().app_platform.session_duration_secs.max(1),
-        ))
-        .with_config_manager(config_manager)
-        .with_health_evaluator(health_evaluator);
+        let mut app_platform_state =
+            AppPlatformState::new(state.device_id().to_string(), app_platform_store)
+                .with_session_duration(Duration::from_secs(
+                    state.config().app_platform.session_duration_secs.max(1),
+                ))
+                .with_config_manager(config_manager)
+                .with_health_evaluator(health_evaluator);
         if let Some(mqtt_client) = state.mqtt_client().cloned() {
-            app_platform_state = app_platform_state.with_data_router(
-                data_router,
-                Arc::new(mqtt_client),
-            );
+            app_platform_state =
+                app_platform_state.with_data_router(data_router, Arc::new(mqtt_client));
         }
         let app_platform_state = Arc::new(app_platform_state);
         let app_platform_service = AppPlatformService::new(Arc::clone(&app_platform_state));
@@ -517,7 +513,7 @@ impl DeviceControl for DeviceControlService {
     ) -> Result<Response<Self::CaptureScreenStream>, Status> {
         Err(Status::unimplemented(
             "Screen capture has been moved to a standalone application. \
-             This feature will be available as a payload app in Phase 2."
+             This feature will be available as a payload app in Phase 2.",
         ))
     }
 

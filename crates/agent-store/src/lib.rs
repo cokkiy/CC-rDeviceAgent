@@ -442,10 +442,17 @@ impl StateStore {
                last_heartbeat_unix_ms = excluded.last_heartbeat_unix_ms,
                revoked = excluded.revoked",
             params![
-                r.app_id, r.app_name, r.app_version, r.session_token_hash,
-                r.capabilities_json, r.metadata_json, r.device_id,
-                r.registered_at_unix_ms, r.expires_at_unix_ms,
-                r.last_heartbeat_unix_ms, r.revoked as i64
+                r.app_id,
+                r.app_name,
+                r.app_version,
+                r.session_token_hash,
+                r.capabilities_json,
+                r.metadata_json,
+                r.device_id,
+                r.registered_at_unix_ms,
+                r.expires_at_unix_ms,
+                r.last_heartbeat_unix_ms,
+                r.revoked as i64
             ],
         )?;
         Ok(())
@@ -482,7 +489,8 @@ impl StateStore {
         };
         let mut stmt = self.connection.prepare(sql)?;
         let rows = stmt.query_map([], row_to_app_session)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     pub fn revoke_app_session(&self, app_id: &str) -> StoreResult<bool> {
@@ -594,7 +602,8 @@ impl StateStore {
              ORDER BY cv.key ASC",
         )?;
         let rows = stmt.query_map(params![scope], row_to_config_version)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     // ── Upgrade State ────────────────────────────────────────────────────────
@@ -707,7 +716,7 @@ impl StateStore {
             )?;
         }
 
-     Ok(())
+        Ok(())
     }
 }
 

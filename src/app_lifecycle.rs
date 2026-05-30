@@ -5,13 +5,12 @@
 //! Linux, Windows, and macOS.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::info;
 
 // ── lifecycle state machine ────────────────────────────────────────────────
 
@@ -34,7 +33,13 @@ impl std::fmt::Display for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Failed { reason } => write!(f, "failed({reason})"),
-            other => write!(f, "{}", serde_json::to_string(other).unwrap_or_default().trim_matches('"')),
+            other => write!(
+                f,
+                "{}",
+                serde_json::to_string(other)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+            ),
         }
     }
 }
@@ -70,7 +75,6 @@ struct AppInstance {
     manifest: AppManifest,
     state: AppState,
     pid: Option<u32>,
-    restart_count: u32,
     last_start: Option<Instant>,
 }
 
@@ -78,13 +82,33 @@ struct AppInstance {
 
 /// Commands sent from RPC handlers into the lifecycle task.
 pub enum LifecycleCmd {
-    Install { manifest: AppManifest, reply: tokio::sync::oneshot::Sender<Result<()>> },
-    Start   { app_id: String,        reply: tokio::sync::oneshot::Sender<Result<()>> },
-    Stop    { app_id: String,        reply: tokio::sync::oneshot::Sender<Result<()>> },
-    Restart { app_id: String,        reply: tokio::sync::oneshot::Sender<Result<()>> },
-    Uninstall { app_id: String,      reply: tokio::sync::oneshot::Sender<Result<()>> },
-    GetState  { app_id: String,      reply: tokio::sync::oneshot::Sender<Option<AppState>> },
-    ListApps  {                      reply: tokio::sync::oneshot::Sender<Vec<(String, AppState)>> },
+    Install {
+        manifest: Box<AppManifest>,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
+    Start {
+        app_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
+    Stop {
+        app_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
+    Restart {
+        app_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
+    Uninstall {
+        app_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
+    GetState {
+        app_id: String,
+        reply: tokio::sync::oneshot::Sender<Option<AppState>>,
+    },
+    ListApps {
+        reply: tokio::sync::oneshot::Sender<Vec<(String, AppState)>>,
+    },
 }
 
 /// Lightweight handle for RPC / health-check consumers.
@@ -96,37 +120,68 @@ pub struct AppLifecycleHandle {
 impl AppLifecycleHandle {
     pub async fn install(&self, manifest: AppManifest) -> Result<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.tx.send(LifecycleCmd::Install { manifest, reply: tx }).await?;
+        self.tx
+            .send(LifecycleCmd::Install {
+                manifest: Box::new(manifest),
+                reply: tx,
+            })
+            .await?;
         rx.await?
     }
 
     pub async fn start(&self, app_id: &str) -> Result<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.tx.send(LifecycleCmd::Start { app_id: app_id.into(), reply: tx }).await?;
+        self.tx
+            .send(LifecycleCmd::Start {
+                app_id: app_id.into(),
+                reply: tx,
+            })
+            .await?;
         rx.await?
     }
 
     pub async fn stop(&self, app_id: &str) -> Result<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.tx.send(LifecycleCmd::Stop { app_id: app_id.into(), reply: tx }).await?;
+        self.tx
+            .send(LifecycleCmd::Stop {
+                app_id: app_id.into(),
+                reply: tx,
+            })
+            .await?;
         rx.await?
     }
 
     pub async fn restart(&self, app_id: &str) -> Result<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.tx.send(LifecycleCmd::Restart { app_id: app_id.into(), reply: tx }).await?;
+        self.tx
+            .send(LifecycleCmd::Restart {
+                app_id: app_id.into(),
+                reply: tx,
+            })
+            .await?;
         rx.await?
     }
 
     pub async fn uninstall(&self, app_id: &str) -> Result<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.tx.send(LifecycleCmd::Uninstall { app_id: app_id.into(), reply: tx }).await?;
+        self.tx
+            .send(LifecycleCmd::Uninstall {
+                app_id: app_id.into(),
+                reply: tx,
+            })
+            .await?;
         rx.await?
     }
 
     pub async fn get_state(&self, app_id: &str) -> Option<AppState> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let _ = self.tx.send(LifecycleCmd::GetState { app_id: app_id.into(), reply: tx }).await;
+        let _ = self
+            .tx
+            .send(LifecycleCmd::GetState {
+                app_id: app_id.into(),
+                reply: tx,
+            })
+            .await;
         rx.await.ok().flatten()
     }
 
@@ -154,7 +209,7 @@ async fn lifecycle_task(mut rx: mpsc::Receiver<LifecycleCmd>) {
         match cmd {
             LifecycleCmd::Install { manifest, reply } => {
                 let app_id = manifest.app_id.clone();
-                let res = do_install(&mut apps, manifest);
+                let res = do_install(&mut apps, *manifest);
                 if res.is_ok() {
                     info!(app_id = %app_id, "App installed");
                 }
@@ -224,7 +279,6 @@ fn do_install(apps: &mut HashMap<String, AppInstance>, manifest: AppManifest) ->
             manifest,
             state: AppState::Installed,
             pid: None,
-            restart_count: 0,
             last_start: None,
         },
     );
@@ -239,7 +293,7 @@ async fn do_start(apps: &mut HashMap<String, AppInstance>, app_id: &str) -> Resu
     match &inst.state {
         AppState::Running => return Ok(()), // idempotent
         AppState::Uninstalled | AppState::Uninstalling => {
-            return Err(anyhow!("app is uninstalled"))
+            return Err(anyhow!("app is uninstalled"));
         }
         _ => {}
     }
@@ -285,7 +339,10 @@ async fn do_stop(apps: &mut HashMap<String, AppInstance>, app_id: &str) -> Resul
         #[cfg(windows)]
         {
             // On Windows use TerminateProcess; PAL integration in W2.3+
-            warn!(pid, "Windows process termination not yet implemented via PAL");
+            tracing::warn!(
+                pid,
+                "Windows process termination not yet implemented via PAL"
+            );
         }
     }
 
@@ -299,14 +356,14 @@ async fn do_uninstall(apps: &mut HashMap<String, AppInstance>, app_id: &str) -> 
         .ok_or_else(|| anyhow!("unknown app: {}", app_id))?;
 
     // Stop first if running
-    if matches!(inst.state, AppState::Running | AppState::Starting) {
-        if let Some(pid) = inst.pid.take() {
-            #[cfg(unix)]
-            {
-                use nix::sys::signal::{Signal, kill};
-                use nix::unistd::Pid;
-                let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
-            }
+    if matches!(inst.state, AppState::Running | AppState::Starting)
+        && let Some(pid) = inst.pid.take()
+    {
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{Signal, kill};
+            use nix::unistd::Pid;
+            let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
         }
     }
 
@@ -377,7 +434,10 @@ mod tests {
     fn state_display() {
         assert_eq!(AppState::Running.to_string(), "running");
         assert_eq!(
-            AppState::Failed { reason: "oom".into() }.to_string(),
+            AppState::Failed {
+                reason: "oom".into()
+            }
+            .to_string(),
             "failed(oom)"
         );
     }
