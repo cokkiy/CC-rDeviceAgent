@@ -64,7 +64,7 @@ pub struct UpgradeManifest {
     pub public_key_b64: String,
     /// Ed25519 signature (base64) over the package SHA-256 hash.
     pub signature_b64: String,
-    /// SHA-256 hex digest of the `tar.zst` archive (excluding manifest).
+    /// SHA-256 hex digest of the full `tar.zst` archive (including any embedded manifest).
     pub package_sha256: String,
     /// Monotonically increasing build number — prevents rollback to older builds.
     pub build_number: u64,
@@ -237,14 +237,24 @@ impl<S: UpgradeStrategy> UpgradeEngine<S> {
 
         // Validate manifest
         self.set_state(UpgradeState::Validated);
-        validate_manifest(&manifest)?;
+        if let Err(e) = validate_manifest(&manifest) {
+            self.set_state(UpgradeState::Failed {
+                reason: e.to_string(),
+            });
+            return Err(e);
+        }
 
         // Downloading (already on disk — caller downloaded via FileTransfer)
         self.set_state(UpgradeState::Downloading);
 
         // Verify package integrity
         self.set_state(UpgradeState::Verifying);
-        verify_package(&manifest, package_path).await?;
+        if let Err(e) = verify_package(&manifest, package_path).await {
+            self.set_state(UpgradeState::Failed {
+                reason: e.to_string(),
+            });
+            return Err(e);
+        }
 
         // Pre-check
         self.set_state(UpgradeState::PreCheck);

@@ -227,6 +227,11 @@ impl ConfigManager {
         self.tx.subscribe()
     }
 
+    /// Return the current global version — monotonically increases with every set/delete.
+    pub fn global_version(&self) -> u64 {
+        self.inner.read().unwrap().global_version
+    }
+
     /// Convenience: watch a specific app's config.
     pub fn subscribe_app(&self, app_id: &str) -> AppConfigWatcher {
         AppConfigWatcher {

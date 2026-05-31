@@ -284,6 +284,18 @@ pub async fn run(
 
                     let uds = UnixListener::bind(&socket_path)
                         .context("bind Unix socket for app platform")?;
+
+                    // Set restrictive permissions: owner read/write only (0o600),
+                    // so only the agent process owner can connect.
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(
+                            &socket_path,
+                            std::fs::Permissions::from_mode(0o600),
+                        )
+                        .context("set socket permissions")?;
+                    }
+
                     let uds_stream = UnixListenerStream::new(uds);
 
                     info!(socket_path = %socket_path, "Southbound IPC server listening");

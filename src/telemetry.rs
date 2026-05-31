@@ -205,6 +205,7 @@ pub struct TelemetryProfileSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TelemetryBundle {
     pub ts: i64,
+    #[serde(alias = "station_id")]
     pub device_id: String,
     pub schema_version: u32,
     pub profiles_version: u64,

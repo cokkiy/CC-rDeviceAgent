@@ -251,7 +251,10 @@ impl AppPlatform for AppPlatformService {
 
         let record = AppHealthReportRecord {
             app_id: req.app_id.clone(),
-            status: format!("{:?}", req.status),
+            status: serde_json::to_string(&HealthStatus::from(req.status))
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string(),
             message: req.message.clone(),
             metrics_json: serde_json::to_string(&req.metrics).unwrap_or_else(|_| "{}".into()),
             reported_at_unix_ms: now_unix_ms(),
@@ -402,24 +405,26 @@ impl AppPlatform for AppPlatformService {
         self.state
             .validate_session(&req.app_id, &req.session_token)?;
 
-        let config = self
+        let (config, version) = self
             .state
             .config_manager
             .as_ref()
             .map(|manager| {
                 let scope = ConfigScope::App(req.app_id.clone());
                 let snapshot = manager.snapshot(&scope);
-                if req.keys.is_empty() {
+                let filtered = if req.keys.is_empty() {
                     snapshot
                 } else {
                     snapshot
                         .into_iter()
                         .filter(|(key, _)| req.keys.iter().any(|wanted| wanted == key))
                         .collect()
-                }
+                };
+                let v = manager.global_version() as i64;
+                (filtered, v)
             })
             .unwrap_or_default();
-        Ok(Response::new(GetConfigResponse { config, version: 1 }))
+        Ok(Response::new(GetConfigResponse { config, version }))
     }
 
     async fn unregister_app(

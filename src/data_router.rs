@@ -19,13 +19,17 @@ pub fn app_uplink_topic(tenant: &str, device_id: &str, app_id: &str, topic: &str
     format!("{tenant}/{device_id}/apps/{app_id}/{topic}")
 }
 
-/// Validate that `topic` does not attempt to escape the app's namespace.
+/// Validate that `topic` does not attempt to escape the app's namespace
+/// and does not contain MQTT wildcard characters (`#`, `+`).
 pub fn validate_app_topic(topic: &str) -> Result<()> {
     if topic.is_empty() {
         return Err(anyhow!("topic must not be empty"));
     }
     if topic.contains("..") || topic.starts_with('/') {
         return Err(anyhow!("invalid topic: {topic}"));
+    }
+    if topic.contains('#') || topic.contains('+') {
+        return Err(anyhow!("topic must not contain MQTT wildcard characters: {topic}"));
     }
     Ok(())
 }
@@ -157,6 +161,8 @@ mod tests {
         assert!(validate_app_topic("").is_err());
         assert!(validate_app_topic("../secrets").is_err());
         assert!(validate_app_topic("/absolute").is_err());
+        assert!(validate_app_topic("sensor/#").is_err());
+        assert!(validate_app_topic("sensor/+/temp").is_err());
     }
 
     #[tokio::test]

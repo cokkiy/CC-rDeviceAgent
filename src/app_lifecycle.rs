@@ -309,8 +309,11 @@ async fn do_start(apps: &mut HashMap<String, AppInstance>, app_id: &str) -> Resu
     let child = cmd.spawn().context("spawn app process")?;
     let pid = child.id();
 
-    // Detach — we track by PID; a future watchdog task can wait for exit.
-    std::mem::forget(child);
+    // Reap child in background when it exits to avoid zombie processes.
+    tokio::spawn(async move {
+        let mut child = child;
+        let _ = child.wait().await;
+    });
 
     inst.pid = pid;
     inst.state = AppState::Running;
@@ -370,9 +373,9 @@ async fn do_uninstall(apps: &mut HashMap<String, AppInstance>, app_id: &str) -> 
 
     inst.state = AppState::Uninstalled;
     // Remove install directory if it's under our managed apps path
-    // (safety: only remove if work_dir is inside /var/lib/cc-ragent/apps/)
+    // (safety: only remove if work_dir is inside /var/lib/cc-rdeviceagent/apps/)
     let work_dir = inst.manifest.work_dir.clone();
-    if work_dir.starts_with("/var/lib/cc-ragent/apps") {
+    if work_dir.starts_with("/var/lib/cc-rdeviceagent/apps") {
         let _ = tokio::fs::remove_dir_all(&work_dir).await;
     }
 

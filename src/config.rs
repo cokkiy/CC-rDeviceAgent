@@ -107,7 +107,8 @@ impl Default for ControlConfig {
 impl Default for AppPlatformConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            // Disabled by default on Windows until Named Pipe support is implemented.
+            enabled: !cfg!(windows),
             socket_path: if cfg!(windows) {
                 r"\\.\pipe\cc-rdeviceagent-app".to_string()
             } else {
