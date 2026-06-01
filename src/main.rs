@@ -9,13 +9,14 @@ use tokio::sync::watch;
 use tracing::{debug, error};
 
 fn main() -> Result<()> {
-    agent_telemetry::init_tracing(&TelemetryConfig::default());
     let cli = Cli::parse()?;
 
     if cli.version {
         println!("cc-rdeviceagent {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+
+    agent_telemetry::init_tracing(&TelemetryConfig::default());
 
     #[cfg(windows)]
     if matches!(cli.mode, RunMode::Auto) {
