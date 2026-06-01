@@ -1,9 +1,17 @@
 [package]
-name = "app-sdk"
+name = "cc-rdeviceagent-app-sdk"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 description = "CC-rDeviceAgent payload application SDK"
+license-file = "../../LICENSE"
+readme = "README.md"
+repository = "https://github.com/cokkiy/CC-rDeviceAgent"
+keywords = ["cc-rdeviceagent", "sdk", "iot", "grpc"]
+categories = ["api-bindings", "network-programming"]
+
+[lib]
+name = "app_sdk"
 
 [dependencies]
 anyhow = { workspace = true }

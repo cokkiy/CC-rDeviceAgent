@@ -12,6 +12,11 @@ fn main() -> Result<()> {
     agent_telemetry::init_tracing(&TelemetryConfig::default());
     let cli = Cli::parse()?;
 
+    if cli.version {
+        println!("cc-rdeviceagent {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     #[cfg(windows)]
     if matches!(cli.mode, RunMode::Auto) {
         if try_run_windows_service()? {
@@ -83,6 +88,7 @@ struct Cli {
     mode: RunMode,
     config_path: Option<PathBuf>,
     console_telemetry: bool,
+    version: bool,
 }
 
 impl Cli {
@@ -91,9 +97,13 @@ impl Cli {
         let mut mode = RunMode::Auto;
         let mut config_path = None;
         let mut console_telemetry = false;
+        let mut version = false;
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "-V" | "--version" => {
+                    version = true;
+                }
                 "foreground" | "--foreground" => mode = RunMode::Foreground,
                 "daemon" | "--daemon" => mode = RunMode::Daemon,
                 "--config" => {
@@ -113,6 +123,7 @@ impl Cli {
             mode,
             config_path,
             console_telemetry,
+            version,
         })
     }
 }

@@ -264,6 +264,7 @@ Supported CLI arguments:
 - `daemon` or `--daemon`
 - `--config <path>`
 - `--console-telemetry` or `--telemetry-console`
+- `--version` or `-V`
 
 Platform behavior:
 

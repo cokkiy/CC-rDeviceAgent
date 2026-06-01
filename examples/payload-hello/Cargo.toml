@@ -8,4 +8,4 @@ anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-app-sdk = { path = "../../crates/app-sdk" }
+app_sdk = { package = "cc-rdeviceagent-app-sdk", path = "../../crates/app-sdk" }
