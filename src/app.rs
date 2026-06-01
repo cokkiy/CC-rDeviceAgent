@@ -11,13 +11,14 @@ use ring::digest;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::watch;
-use tonic::metadata::MetadataValue;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
+use crate::app_platform::{AppPlatformService, AppPlatformState};
 use crate::config::AppConfig;
-use crate::grpc::agent::desktop_agent_client::DesktopAgentClient;
+use crate::config_manager::ConfigManager;
+use crate::data_router::DataRouter;
 use crate::grpc::cc::{
     AppControlResult, AppStartParameter, AppStartingResult, CaptureScreenChunk,
     CaptureScreenRequest, CloseAppRequest, CloseAppResponse, DownloadChunk, DownloadRequest, Empty,
@@ -29,9 +30,10 @@ use crate::grpc::cc::{
     ReplaceTelemetryProfilesRequest, RestartAppRequest, RestartAppResponse, ServerVersionInfo,
     SetStateGatheringIntervalRequest, SetWatchingAppRequest, ShutdownRequest, StartAppRequest,
     StartAppResponse, TelemetryInclude, TelemetryIncludeDefinition, TelemetryProfile, UploadChunk,
-    UploadResult, file_transfer_server::FileTransfer, file_transfer_server::FileTransferServer,
-    station_control_server::StationControl, station_control_server::StationControlServer,
+    UploadResult, device_control_server::DeviceControl, device_control_server::DeviceControlServer,
+    file_transfer_server::FileTransfer, file_transfer_server::FileTransferServer,
 };
+use crate::health_evaluator::HealthEvaluator;
 use crate::platform;
 use crate::state::{AppState, find_process_ids_by_name, terminate_process};
 use crate::telemetry::{TelemetryProfileConfig, TelemetryScheduler};
@@ -46,15 +48,9 @@ pub async fn run(
     let service_path = std::env::current_exe().context("resolve current executable")?;
     let state = Arc::new(AppState::new(config, resolved_config_path, service_path)?);
     let listen_addr = state.listen_addr()?;
-    if !state.agent_target().ip().is_loopback() {
-        anyhow::bail!(
-            "desktop agent target must stay on loopback, got {}",
-            state.agent_target()
-        );
-    }
 
     info!(
-        station_id = state.station_id(),
+        device_id = state.device_id(),
         listen_addr = %listen_addr,
         watched_processes = state.watched_processes().len(),
         console_telemetry,
@@ -75,8 +71,7 @@ pub async fn run(
             info!("MQTT status publisher started");
 
             loop {
-                let status =
-                    crate::mqtt::StationStatus::online(state_clone.station_id().to_string());
+                let status = crate::mqtt::DeviceStatus::online(state_clone.device_id().to_string());
                 if let Err(error) = mqtt_client.publish_status(&status).await {
                     warn!(error = %error, "failed to publish MQTT status");
                 }
@@ -140,7 +135,7 @@ pub async fn run(
                         &due_collect,
                         now_ms,
                         &collected,
-                        state_clone.station_id(),
+                        state_clone.device_id(),
                         profiles_version,
                     ) {
                         if let Err(error) = mqtt_client.publish_telemetry(&bundle).await {
@@ -219,15 +214,111 @@ pub async fn run(
         RbacPolicy::default(),
         ReplayGuard::new(Duration::from_secs(300)),
     )));
-    let identity_extractor = IdentityExtractor::new(state.station_id().to_string());
+    let identity_extractor = IdentityExtractor::new(state.device_id().to_string());
     let resource_mapper = ResourceMapper;
     let security_layer = SecurityInterceptorLayer::new(
         Arc::clone(&security_center),
         audit_writer,
         identity_extractor,
         resource_mapper,
-        state.station_id().to_string(),
+        state.device_id().to_string(),
     );
+
+    // Start southbound IPC server for payload applications if enabled
+    let _app_platform_handle: Option<tokio::task::JoinHandle<Result<()>>> = if state
+        .config()
+        .app_platform
+        .enabled
+    {
+        let app_platform_store = agent_store::StateStore::open(&store_path)
+            .map_err(|e| anyhow::anyhow!("open state store for app platform: {e}"))?;
+        let config_store = agent_store::StateStore::open(&store_path)
+            .map_err(|e| anyhow::anyhow!("open state store for config manager: {e}"))?;
+        let config_manager = ConfigManager::new_with_store(config_store);
+        let data_router = Arc::new(DataRouter::new(
+            "default".to_string(),
+            state.device_id().to_string(),
+        ));
+        let (health_action_tx, mut health_action_rx) = tokio::sync::mpsc::channel(64);
+        let health_evaluator = HealthEvaluator::new(health_action_tx);
+        tokio::spawn(async move {
+            while let Some(action) = health_action_rx.recv().await {
+                warn!(
+                    app_id = %action.app_id,
+                    action = ?action.action,
+                    failures = action.consecutive_failures,
+                    "App health action emitted"
+                );
+            }
+        });
+        let mut app_platform_state =
+            AppPlatformState::new(state.device_id().to_string(), app_platform_store)
+                .with_session_duration(Duration::from_secs(
+                    state.config().app_platform.session_duration_secs.max(1),
+                ))
+                .with_config_manager(config_manager)
+                .with_health_evaluator(health_evaluator);
+        if let Some(mqtt_client) = state.mqtt_client().cloned() {
+            app_platform_state =
+                app_platform_state.with_data_router(data_router, Arc::new(mqtt_client));
+        }
+        let app_platform_state = Arc::new(app_platform_state);
+        let app_platform_service = AppPlatformService::new(Arc::clone(&app_platform_state));
+        let socket_path = state.config().app_platform.socket_path.clone();
+
+        info!(socket_path = %socket_path, "Starting southbound IPC server");
+
+        let shutdown_clone = shutdown.clone();
+        Some(tokio::spawn(async move {
+            #[allow(unused_mut)]
+            let mut shutdown_clone = shutdown_clone;
+            #[cfg(unix)]
+            {
+                use tokio::net::UnixListener;
+                use tokio_stream::wrappers::UnixListenerStream;
+
+                // Ensure parent directory exists
+                if let Some(parent) = std::path::Path::new(&socket_path).parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+
+                // Remove existing socket file
+                let _ = tokio::fs::remove_file(&socket_path).await;
+
+                let uds = UnixListener::bind(&socket_path)
+                    .context("bind Unix socket for app platform")?;
+
+                // Set restrictive permissions: owner read/write only (0o600),
+                // so only the agent process owner can connect.
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+                        .context("set socket permissions")?;
+                }
+
+                let uds_stream = UnixListenerStream::new(uds);
+
+                info!(socket_path = %socket_path, "Southbound IPC server listening");
+
+                Server::builder()
+                    .add_service(app_platform_service.into_server())
+                    .serve_with_incoming_shutdown(uds_stream, async move {
+                        let _ = shutdown_clone.changed().await;
+                    })
+                    .await
+                    .context("run southbound IPC server")
+            }
+
+            #[cfg(windows)]
+            {
+                // TODO: Implement Named Pipe server for Windows
+                anyhow::bail!("Windows Named Pipe support not yet implemented")
+            }
+        }))
+    } else {
+        info!("Southbound IPC server disabled");
+        None
+    };
 
     let mut server = Server::builder();
     if control_tls.enabled {
@@ -238,7 +329,7 @@ pub async fn run(
 
     server
         .layer(security_layer)
-        .add_service(StationControlServer::new(StationControlService {
+        .add_service(DeviceControlServer::new(DeviceControlService {
             state: Arc::clone(&state),
         }))
         .add_service(FileTransferServer::new(FileTransferService {
@@ -268,12 +359,12 @@ fn read_required_file(path: Option<&Path>, field: &str) -> Result<Vec<u8>> {
 }
 
 #[derive(Clone)]
-struct StationControlService {
+struct DeviceControlService {
     state: Arc<AppState>,
 }
 
 #[tonic::async_trait]
-impl StationControl for StationControlService {
+impl DeviceControl for DeviceControlService {
     type CaptureScreenStream =
         Pin<Box<dyn Stream<Item = Result<CaptureScreenChunk, Status>> + Send>>;
 
@@ -339,7 +430,7 @@ impl StationControl for StationControlService {
     async fn get_system_state(
         &self,
         _request: Request<Empty>,
-    ) -> Result<Response<crate::grpc::cc::StationSystemState>, Status> {
+    ) -> Result<Response<crate::grpc::cc::DeviceSystemState>, Status> {
         Ok(Response::new(self.state.system_state()))
     }
 
@@ -431,42 +522,12 @@ impl StationControl for StationControlService {
 
     async fn capture_screen(
         &self,
-        request: Request<CaptureScreenRequest>,
+        _request: Request<CaptureScreenRequest>,
     ) -> Result<Response<Self::CaptureScreenStream>, Status> {
-        let start_position = request.into_inner().start_position;
-        let endpoint = format!("http://{}", self.state.agent_target());
-        let auth_token = self.state.agent_auth_token().to_string();
-        let display_index = self.state.preferred_display_index() as i32;
-
-        let output = try_stream! {
-            let mut client = DesktopAgentClient::connect(endpoint.clone())
-                .await
-                .map_err(|error| Status::unavailable(format!("connect desktop agent at {endpoint}: {error}")))?;
-            let mut request = Request::new(crate::grpc::agent::CaptureRequest {
-                start_position,
-                display_index,
-                force_refresh: start_position == 0,
-            });
-            let token_metadata = MetadataValue::try_from(auth_token.as_str())
-                .map_err(|_| Status::internal("invalid desktop agent auth token"))?;
-            request.metadata_mut().insert("x-cc-agent-token", token_metadata);
-            let response = client
-                .capture_screen(request)
-                .await
-                .map_err(|error| Status::unavailable(format!("capture screen via desktop agent: {error}")))?;
-            let mut stream = response.into_inner();
-
-            while let Some(chunk) = stream.message().await? {
-                yield CaptureScreenChunk {
-                    position: chunk.position,
-                    length: chunk.length,
-                    data: chunk.data,
-                    completed: chunk.completed,
-                };
-            }
-        };
-
-        Ok(Response::new(Box::pin(output)))
+        Err(Status::unimplemented(
+            "Screen capture has been moved to a standalone application. \
+             This feature will be available as a payload app in Phase 2.",
+        ))
     }
 
     async fn get_file_info(
@@ -956,27 +1017,28 @@ async fn finalize_upload(path: Option<PathBuf>, file: Option<File>) -> Result<()
             .map_err(status_from_error)?;
     }
 
+    #[cfg(unix)]
     if let Some(path) = path {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::PermissionsExt;
 
-            let mode = if looks_executable(&path).await.unwrap_or(false) {
-                0o777
-            } else {
-                0o666
-            };
+        let mode = if looks_executable(&path).await.unwrap_or(false) {
+            0o777
+        } else {
+            0o666
+        };
 
-            fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
-                .await
-                .with_context(|| format!("set permissions {}", path.display()))
-                .map_err(status_from_error)?;
-        }
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .await
+            .with_context(|| format!("set permissions {}", path.display()))
+            .map_err(status_from_error)?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
 
     Ok(())
 }
 
+#[cfg(unix)]
 async fn looks_executable(path: &Path) -> Result<bool> {
     let extension = path
         .extension()
@@ -1147,8 +1209,8 @@ async fn console_telemetry_task(state: Arc<AppState>) {
             .join(" | ");
 
         println!(
-            "[telemetry] station={} cpu={:.2}% memory={} proc_count={} tcp_connections={} udp_listeners={} watched=[{}] net=[{}]",
-            running.station_id,
+            "[telemetry] device={} cpu={:.2}% memory={} proc_count={} tcp_connections={} udp_listeners={} watched=[{}] net=[{}]",
+            running.device_id,
             running.cpu,
             running.current_memory,
             running.proc_count,

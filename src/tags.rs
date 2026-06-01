@@ -1,13 +1,13 @@
 //! Tags Module
 //!
-//! This module provides tag management for stations, allowing stations
+//! This module provides tag management for devices, allowing devices
 //! to be categorized and targeted by tag-based selectors.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// A tag for categorizing stations.
+/// A tag for categorizing devices.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tag {
     /// Unique identifier
@@ -60,11 +60,11 @@ impl Tag {
     }
 }
 
-/// A station's tag assignment.
+/// A device's tag assignment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StationTag {
-    /// Station ID
-    pub station_id: String,
+pub struct DeviceTag {
+    /// Device ID
+    pub device_id: String,
     /// Tag ID
     pub tag_id: Uuid,
     /// When the tag was assigned
@@ -73,11 +73,11 @@ pub struct StationTag {
     pub assigned_by: Option<String>,
 }
 
-impl StationTag {
-    /// Create a new station-tag assignment
-    pub fn new(station_id: impl Into<String>, tag_id: Uuid) -> Self {
+impl DeviceTag {
+    /// Create a new device-tag assignment
+    pub fn new(device_id: impl Into<String>, tag_id: Uuid) -> Self {
         Self {
-            station_id: station_id.into(),
+            device_id: device_id.into(),
             tag_id,
             assigned_at: Utc::now(),
             assigned_by: None,
@@ -131,16 +131,16 @@ pub enum TagSortField {
     Name,
 }
 
-/// Filter options for querying station tags.
+/// Filter options for querying device tags.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct StationTagFilter {
-    /// Filter by station ID
-    pub station_id: Option<String>,
+pub struct DeviceTagFilter {
+    /// Filter by device ID
+    pub device_id: Option<String>,
     /// Filter by tag ID
     pub tag_id: Option<Uuid>,
     /// Sort by field
     #[serde(default)]
-    pub sort_by: StationTagSortField,
+    pub sort_by: DeviceTagSortField,
     /// Sort ascending or descending
     #[serde(default = "default_sort_desc")]
     pub sort_desc: bool,
@@ -152,14 +152,14 @@ pub struct StationTagFilter {
     pub limit: u64,
 }
 
-/// Fields that can be used for sorting station tags.
+/// Fields that can be used for sorting device tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
-pub enum StationTagSortField {
+pub enum DeviceTagSortField {
     #[default]
     AssignedAt,
-    StationId,
+    DeviceId,
     TagId,
 }
 
@@ -168,8 +168,8 @@ pub enum StationTagSortField {
 pub struct TagStats {
     /// Total number of tags
     pub total_tags: u64,
-    /// Total station-tag assignments
+    /// Total device-tag assignments
     pub total_assignments: u64,
-    /// Average tags per station (if station_count provided)
-    pub avg_tags_per_station: Option<f64>,
+    /// Average tags per device (if device_count provided)
+    pub avg_tags_per_device: Option<f64>,
 }

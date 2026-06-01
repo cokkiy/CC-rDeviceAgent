@@ -3,7 +3,7 @@ set -eu
 
 TEMPLATE_PATH="/etc/cc-rdeviceagent/CC-rDeviceAgent.toml.template"
 CONFIG_PATH="${CC_CONFIG_PATH:-/var/lib/cc-rdeviceagent/CC-rDeviceAgent.toml}"
-STATION_ID="${CC_STATION_ID:-${HOSTNAME:-iot-device}}"
+DEVICE_ID="${CC_DEVICE_ID:-${HOSTNAME:-iot-device}}"
 BROKER_HOST="${CC_MQTT_BROKER_HOST:-mosquitto}"
 BROKER_PORT="${CC_MQTT_BROKER_PORT:-1883}"
 STATE_INTERVAL_SECONDS="${CC_STATE_INTERVAL_SECONDS:-5}"
@@ -16,7 +16,7 @@ escape_sed() {
 mkdir -p "$(dirname "$CONFIG_PATH")"
 
 sed \
-    -e "s|__STATION_ID__|$(escape_sed "$STATION_ID")|g" \
+    -e "s|__DEVICE_ID__|$(escape_sed "$DEVICE_ID")|g" \
     -e "s|__STATE_INTERVAL_SECONDS__|$(escape_sed "$STATE_INTERVAL_SECONDS")|g" \
     -e "s|__BROKER_HOST__|$(escape_sed "$BROKER_HOST")|g" \
     -e "s|__BROKER_PORT__|$(escape_sed "$BROKER_PORT")|g" \

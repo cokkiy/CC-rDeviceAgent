@@ -1,7 +1,7 @@
 //! Batch Operations Module
 //!
 //! This module provides batch task management, target selection, and execution policies
-//! for command script operations across multiple stations.
+//! for command script operations across multiple devices.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -43,21 +43,21 @@ impl std::fmt::Display for BatchTaskStatus {
 }
 
 /// Target selector for batch operations.
-/// Defines which stations should be targeted by a batch task.
+/// Defines which devices should be targeted by a batch task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[derive(Default)]
 pub enum TargetSelector {
-    /// Select all stations
+    /// Select all devices
     #[default]
     All,
-    /// Select stations by exact ID match
+    /// Select devices by exact ID match
     ByIds { ids: Vec<String> },
-    /// Select stations matching a pattern (wildcard support)
+    /// Select devices matching a pattern (wildcard support)
     ByPattern { pattern: String },
-    /// Select stations by tag
+    /// Select devices by tag
     ByTag { tag: String },
-    /// Select stations by station group
+    /// Select devices by device group
     ByGroup { group: String },
 }
 
@@ -111,12 +111,12 @@ impl TargetSelector {
         }
     }
 
-    /// Check if a station ID matches this selector
-    pub fn matches(&self, station_id: &str, tags: &[String], groups: &[String]) -> bool {
+    /// Check if a device ID matches this selector
+    pub fn matches(&self, device_id: &str, tags: &[String], groups: &[String]) -> bool {
         match self {
             TargetSelector::All => true,
-            TargetSelector::ByIds { ids } => ids.iter().any(|id| id == station_id),
-            TargetSelector::ByPattern { pattern } => station_id.starts_with(pattern),
+            TargetSelector::ByIds { ids } => ids.iter().any(|id| id == device_id),
+            TargetSelector::ByPattern { pattern } => device_id.starts_with(pattern),
             TargetSelector::ByTag { tag } => tags.iter().any(|t| t == tag),
             TargetSelector::ByGroup { group } => groups.iter().any(|g| g == group),
         }
@@ -163,8 +163,8 @@ pub struct BatchParameterValue {
 /// A single execution item within a batch task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchExecutionItem {
-    /// Target station ID
-    pub station_id: String,
+    /// Target device ID
+    pub device_id: String,
     /// Script ID to execute
     pub script_id: Uuid,
     /// Parameter values for this execution
@@ -190,7 +190,7 @@ pub enum BatchExecutionStatus {
     Skipped,
 }
 
-/// A batch task that coordinates execution of scripts across multiple stations.
+/// A batch task that coordinates execution of scripts across multiple devices.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchTask {
     /// Unique identifier
@@ -513,8 +513,8 @@ mod tests {
             panic!("Expected ByGroup");
         }
 
-        if let TargetSelector::ByPattern { pattern } = TargetSelector::parse("station-*") {
-            assert_eq!(pattern, "station-");
+        if let TargetSelector::ByPattern { pattern } = TargetSelector::parse("device-*") {
+            assert_eq!(pattern, "device-");
         } else {
             panic!("Expected ByPattern");
         }
@@ -549,9 +549,9 @@ mod tests {
 
         assert!(
             TargetSelector::ByPattern {
-                pattern: "station-".to_string()
+                pattern: "device-".to_string()
             }
-            .matches("station-001", &tags, &groups)
+            .matches("device-001", &tags, &groups)
         );
 
         assert!(
@@ -591,7 +591,7 @@ mod tests {
     fn test_batch_executor_order() {
         let items: Vec<BatchExecutionItem> = (0..5)
             .map(|i| BatchExecutionItem {
-                station_id: format!("station-{}", i),
+                device_id: format!("device-{}", i),
                 script_id: Uuid::new_v4(),
                 parameters: Vec::new(),
                 result: None,
@@ -654,14 +654,14 @@ mod tests {
 
         // Add execution items
         task.execution_items.push(BatchExecutionItem {
-            station_id: "station-1".to_string(),
+            device_id: "device-1".to_string(),
             script_id: script.id,
             parameters: Vec::new(),
             result: None,
             status: BatchExecutionStatus::Success,
         });
         task.execution_items.push(BatchExecutionItem {
-            station_id: "station-2".to_string(),
+            device_id: "device-2".to_string(),
             script_id: script.id,
             parameters: Vec::new(),
             result: None,

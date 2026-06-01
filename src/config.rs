@@ -11,7 +11,7 @@ use crate::telemetry::{TelemetryProfileConfig, validate_profiles};
 pub struct AppConfig {
     pub service: ServiceConfig,
     pub control: ControlConfig,
-    pub agent: AgentConfig,
+    pub app_platform: AppPlatformConfig,
     pub mqtt: MqttConfig,
 }
 
@@ -19,7 +19,8 @@ pub struct AppConfig {
 #[serde(default)]
 pub struct ServiceConfig {
     pub service_name: String,
-    pub station_id: String,
+    #[serde(alias = "station_id")]
+    pub device_id: String,
     pub state_interval_seconds: u64,
     pub watched_processes: Vec<String>,
     pub udp_display_target: String,
@@ -43,10 +44,10 @@ pub struct ControlConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
-pub struct AgentConfig {
-    pub listen_addr: String,
-    pub auth_token: String,
-    pub preferred_display_index: u32,
+pub struct AppPlatformConfig {
+    pub enabled: bool,
+    pub socket_path: String,
+    pub session_duration_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -75,7 +76,7 @@ impl Default for ServiceConfig {
     fn default() -> Self {
         Self {
             service_name: "CC-rDeviceAgent".to_string(),
-            station_id: String::new(),
+            device_id: String::new(),
             state_interval_seconds: 5,
             watched_processes: Vec::new(),
             udp_display_target: "127.0.0.1:9008".to_string(),
@@ -103,12 +104,17 @@ impl Default for ControlConfig {
     }
 }
 
-impl Default for AgentConfig {
+impl Default for AppPlatformConfig {
     fn default() -> Self {
         Self {
-            listen_addr: "127.0.0.1:50052".to_string(),
-            auth_token: "local-change-me".to_string(),
-            preferred_display_index: 0,
+            // Disabled by default on Windows until Named Pipe support is implemented.
+            enabled: !cfg!(windows),
+            socket_path: if cfg!(windows) {
+                r"\\.\pipe\cc-rdeviceagent-app".to_string()
+            } else {
+                "/var/run/cc-rdeviceagent/app.sock".to_string()
+            },
+            session_duration_secs: 3600,
         }
     }
 }
@@ -164,16 +170,16 @@ impl AppConfig {
         std::fs::write(path, content).with_context(|| format!("write config {}", path.display()))
     }
 
-    pub fn resolved_station_id(&self) -> String {
-        if !self.service.station_id.trim().is_empty() {
-            return self.service.station_id.trim().to_string();
+    pub fn resolved_device_id(&self) -> String {
+        if !self.service.device_id.trim().is_empty() {
+            return self.service.device_id.trim().to_string();
         }
 
         let host = hostname::get()
             .ok()
             .and_then(|value| value.into_string().ok())
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "station".to_string());
+            .unwrap_or_else(|| "device".to_string());
 
         format!("{host}-{}", Uuid::new_v4())
     }

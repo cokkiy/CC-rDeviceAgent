@@ -1,0 +1,22 @@
+[package]
+name = "app-sdk"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "CC-rDeviceAgent payload application SDK"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = "0.14"
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tower = "0.5"
+hyper-util = { version = "0.1", features = ["tokio"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+protoc-bin-vendored = "3.2.0"

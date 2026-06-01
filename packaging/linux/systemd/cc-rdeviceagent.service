@@ -1,5 +1,5 @@
 [Unit]
-Description=CC Rust Station Service
+Description=CC Rust Device Service
 After=network-online.target
 Wants=network-online.target
 

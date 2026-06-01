@@ -91,7 +91,7 @@ enum BatchActionType {
 }
 
 message BatchPowerActionRequest {
-  repeated string station_ids = 1;
+  repeated string device_ids = 1;
   BatchActionType action = 2;
 }
 
@@ -255,7 +255,7 @@ message InterfaceStatistics {
 }
 
 message Statistics {
-  string station_id = 1;
+  string device_id = 1;
   int64 datagrams_received = 2;
   int64 datagrams_sent = 3;
   int64 datagrams_discarded = 4;
@@ -285,23 +285,23 @@ message GetUdpListenerInfosResponse {
   repeated ListenerInfo items = 1;
 }
 
-message StationNetworkInterface {
+message DeviceNetworkInterface {
   string mac = 1;
   repeated string ips = 2;
 }
 
-message StationSystemState {
-  string station_id = 1;
+message DeviceSystemState {
+  string device_id = 1;
   int64 total_memory = 2;
   string computer_name = 3;
-  repeated StationNetworkInterface network_interfaces = 4;
+  repeated DeviceNetworkInterface network_interfaces = 4;
   string os_name = 5;
   string os_version = 6;
 
 }
 
-message StationRunningState {
-  string station_id = 1;
+message DeviceRunningState {
+  string device_id = 1;
   int64 current_memory = 2;
   float cpu = 3;
   int32 proc_count = 4;
@@ -315,7 +315,7 @@ message Process {
 }
 
 message AppRunningState {
-  string station_id = 1;
+  string device_id = 1;
   Process process = 2;
   bool is_running = 3;
   float cpu = 4;
@@ -365,13 +365,13 @@ message ExecuteCommandResponse {
   string stderr = 3;
 }
 
-service StationControl {
+service DeviceControl {
   rpc StartApp(StartAppRequest) returns (StartAppResponse);
   rpc CloseApp(CloseAppRequest) returns (CloseAppResponse);
   rpc RestartApp(RestartAppRequest) returns (RestartAppResponse);
   rpc Reboot(RebootRequest) returns (Empty);
   rpc Shutdown(ShutdownRequest) returns (Empty);
-  rpc GetSystemState(Empty) returns (StationSystemState);
+  rpc GetSystemState(Empty) returns (DeviceSystemState);
   rpc SetWatchingApp(SetWatchingAppRequest) returns (Empty);
   rpc SetStateGatheringInterval(SetStateGatheringIntervalRequest) returns (Empty);
   rpc GetTelemetryProfiles(Empty) returns (GetTelemetryProfilesResponse);

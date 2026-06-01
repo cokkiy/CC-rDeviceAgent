@@ -14,7 +14,7 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
 }
 
-pub const LATEST_SCHEMA_VERSION: i64 = 1;
+pub const LATEST_SCHEMA_VERSION: i64 = 2;
 
 pub struct StateStore {
     connection: Connection,
@@ -45,6 +45,30 @@ pub struct FileTransferTaskRecord {
     pub state: String,
     pub offset: i64,
     pub file_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ConfigVersionRecord {
+    pub scope: String,
+    pub key: String,
+    pub version: i64,
+    pub value_json: String,
+    pub signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct AppManifestRecord {
+    pub app_id: String,
+    pub version: String,
+    pub manifest_json: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct UpgradeStateRecord {
+    pub id: String,
+    pub target_version: String,
+    pub state: String,
+    pub state_json: String,
 }
 
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
@@ -400,6 +424,261 @@ impl StateStore {
         Ok(())
     }
 
+    // ── App Registry ────────────────────────────────────────────────────────
+
+    pub fn upsert_app_session(&self, r: &AppSessionRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO app_sessions(
+                app_id, app_name, app_version, session_token_hash,
+                capabilities_json, metadata_json, device_id,
+                registered_at_unix_ms, expires_at_unix_ms, last_heartbeat_unix_ms, revoked
+             ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+             ON CONFLICT(app_id) DO UPDATE SET
+               app_version = excluded.app_version,
+               session_token_hash = excluded.session_token_hash,
+               capabilities_json = excluded.capabilities_json,
+               metadata_json = excluded.metadata_json,
+               expires_at_unix_ms = excluded.expires_at_unix_ms,
+               last_heartbeat_unix_ms = excluded.last_heartbeat_unix_ms,
+               revoked = excluded.revoked",
+            params![
+                r.app_id,
+                r.app_name,
+                r.app_version,
+                r.session_token_hash,
+                r.capabilities_json,
+                r.metadata_json,
+                r.device_id,
+                r.registered_at_unix_ms,
+                r.expires_at_unix_ms,
+                r.last_heartbeat_unix_ms,
+                r.revoked as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_app_session(&self, app_id: &str) -> StoreResult<Option<AppSessionRecord>> {
+        self.connection
+            .query_row(
+                "SELECT app_id, app_name, app_version, session_token_hash,
+                        capabilities_json, metadata_json, device_id,
+                        registered_at_unix_ms, expires_at_unix_ms,
+                        last_heartbeat_unix_ms, revoked
+                 FROM app_sessions WHERE app_id = ?1",
+                params![app_id],
+                row_to_app_session,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn list_app_sessions(&self, include_revoked: bool) -> StoreResult<Vec<AppSessionRecord>> {
+        let sql = if include_revoked {
+            "SELECT app_id, app_name, app_version, session_token_hash,
+                    capabilities_json, metadata_json, device_id,
+                    registered_at_unix_ms, expires_at_unix_ms,
+                    last_heartbeat_unix_ms, revoked
+             FROM app_sessions ORDER BY registered_at_unix_ms ASC"
+        } else {
+            "SELECT app_id, app_name, app_version, session_token_hash,
+                    capabilities_json, metadata_json, device_id,
+                    registered_at_unix_ms, expires_at_unix_ms,
+                    last_heartbeat_unix_ms, revoked
+             FROM app_sessions WHERE revoked = 0 ORDER BY registered_at_unix_ms ASC"
+        };
+        let mut stmt = self.connection.prepare(sql)?;
+        let rows = stmt.query_map([], row_to_app_session)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn revoke_app_session(&self, app_id: &str) -> StoreResult<bool> {
+        let n = self.connection.execute(
+            "UPDATE app_sessions SET revoked = 1 WHERE app_id = ?1 AND revoked = 0",
+            params![app_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn delete_app_session(&self, app_id: &str) -> StoreResult<()> {
+        self.connection.execute(
+            "DELETE FROM app_sessions WHERE app_id = ?1",
+            params![app_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn touch_app_session(
+        &self,
+        app_id: &str,
+        expires_at_unix_ms: i64,
+        last_heartbeat_unix_ms: i64,
+    ) -> StoreResult<bool> {
+        let n = self.connection.execute(
+            "UPDATE app_sessions
+             SET expires_at_unix_ms = ?2, last_heartbeat_unix_ms = ?3
+             WHERE app_id = ?1 AND revoked = 0",
+            params![app_id, expires_at_unix_ms, last_heartbeat_unix_ms],
+        )?;
+        Ok(n > 0)
+    }
+
+    // ── App Manifests ────────────────────────────────────────────────────────
+
+    pub fn upsert_app_manifest(&self, r: &AppManifestRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO app_manifests(app_id, version, manifest_json)
+             VALUES(?1, ?2, ?3)
+             ON CONFLICT(app_id) DO UPDATE SET
+               version = excluded.version,
+               manifest_json = excluded.manifest_json,
+               updated_at = CURRENT_TIMESTAMP",
+            params![r.app_id, r.version, r.manifest_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_app_manifest(&self, app_id: &str) -> StoreResult<Option<AppManifestRecord>> {
+        self.connection
+            .query_row(
+                "SELECT app_id, version, manifest_json
+                 FROM app_manifests
+                 WHERE app_id = ?1",
+                params![app_id],
+                |row| {
+                    Ok(AppManifestRecord {
+                        app_id: row.get(0)?,
+                        version: row.get(1)?,
+                        manifest_json: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    // ── Config Versions ──────────────────────────────────────────────────────
+
+    pub fn insert_config_version(&self, r: &ConfigVersionRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO config_versions(scope, key, version, value_json, signature)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![r.scope, r.key, r.version, r.value_json, r.signature],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_latest_config(
+        &self,
+        scope: &str,
+        key: &str,
+    ) -> StoreResult<Option<ConfigVersionRecord>> {
+        self.connection
+            .query_row(
+                "SELECT scope, key, version, value_json, signature
+                 FROM config_versions
+                 WHERE scope = ?1 AND key = ?2
+                 ORDER BY version DESC
+                 LIMIT 1",
+                params![scope, key],
+                row_to_config_version,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn load_config_scope(&self, scope: &str) -> StoreResult<Vec<ConfigVersionRecord>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT cv.scope, cv.key, cv.version, cv.value_json, cv.signature
+             FROM config_versions cv
+             JOIN (
+               SELECT key, MAX(version) AS version
+               FROM config_versions
+               WHERE scope = ?1
+               GROUP BY key
+             ) latest ON latest.key = cv.key AND latest.version = cv.version
+             WHERE cv.scope = ?1
+             ORDER BY cv.key ASC",
+        )?;
+        let rows = stmt.query_map(params![scope], row_to_config_version)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    // ── Upgrade State ────────────────────────────────────────────────────────
+
+    pub fn upsert_upgrade_state(&self, r: &UpgradeStateRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO upgrade_state(id, target_version, state, state_json)
+             VALUES(?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+               target_version = excluded.target_version,
+               state = excluded.state,
+               state_json = excluded.state_json,
+               updated_at = CURRENT_TIMESTAMP",
+            params![r.id, r.target_version, r.state, r.state_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_upgrade_state(&self, id: &str) -> StoreResult<Option<UpgradeStateRecord>> {
+        self.connection
+            .query_row(
+                "SELECT id, target_version, state, state_json
+                 FROM upgrade_state
+                 WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(UpgradeStateRecord {
+                        id: row.get(0)?,
+                        target_version: row.get(1)?,
+                        state: row.get(2)?,
+                        state_json: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    // ── App Health Reports ───────────────────────────────────────────────────
+
+    pub fn insert_health_report(&self, r: &AppHealthReportRecord) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO app_health_reports(app_id, status, message, metrics_json, reported_at_unix_ms)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![r.app_id, r.status, r.message, r.metrics_json, r.reported_at_unix_ms],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_latest_health_report(
+        &self,
+        app_id: &str,
+    ) -> StoreResult<Option<AppHealthReportRecord>> {
+        self.connection
+            .query_row(
+                "SELECT app_id, status, message, metrics_json, reported_at_unix_ms
+                 FROM app_health_reports
+                 WHERE app_id = ?1
+                 ORDER BY reported_at_unix_ms DESC LIMIT 1",
+                params![app_id],
+                row_to_health_report,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn prune_health_reports(&self, older_than_unix_ms: i64) -> StoreResult<usize> {
+        self.connection
+            .execute(
+                "DELETE FROM app_health_reports WHERE reported_at_unix_ms < ?1",
+                params![older_than_unix_ms],
+            )
+            .map_err(StoreError::from)
+    }
+
     fn configure(&self) -> StoreResult<()> {
         self.connection.pragma_update(None, "journal_mode", "WAL")?;
         self.connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -425,12 +704,82 @@ impl StateStore {
             self.connection.execute_batch(SCHEMA_V1)?;
             self.connection.execute(
                 "UPDATE schema_version SET version = ?1, applied_at = CURRENT_TIMESTAMP WHERE id = 1",
+                params![1],
+            )?;
+        }
+
+        if self.schema_version()? < 2 {
+            self.connection.execute_batch(SCHEMA_V2)?;
+            self.connection.execute(
+                "UPDATE schema_version SET version = ?1, applied_at = CURRENT_TIMESTAMP WHERE id = 1",
                 params![LATEST_SCHEMA_VERSION],
             )?;
         }
 
         Ok(())
     }
+}
+
+// ── Record types ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct AppSessionRecord {
+    pub app_id: String,
+    pub app_name: String,
+    pub app_version: String,
+    pub session_token_hash: String,
+    pub capabilities_json: String,
+    pub metadata_json: String,
+    pub device_id: String,
+    pub registered_at_unix_ms: i64,
+    pub expires_at_unix_ms: i64,
+    pub last_heartbeat_unix_ms: i64,
+    pub revoked: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppHealthReportRecord {
+    pub app_id: String,
+    pub status: String,
+    pub message: String,
+    pub metrics_json: String,
+    pub reported_at_unix_ms: i64,
+}
+
+fn row_to_app_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<AppSessionRecord> {
+    Ok(AppSessionRecord {
+        app_id: row.get(0)?,
+        app_name: row.get(1)?,
+        app_version: row.get(2)?,
+        session_token_hash: row.get(3)?,
+        capabilities_json: row.get(4)?,
+        metadata_json: row.get(5)?,
+        device_id: row.get(6)?,
+        registered_at_unix_ms: row.get(7)?,
+        expires_at_unix_ms: row.get(8)?,
+        last_heartbeat_unix_ms: row.get(9)?,
+        revoked: row.get::<_, i64>(10)? != 0,
+    })
+}
+
+fn row_to_health_report(row: &rusqlite::Row<'_>) -> rusqlite::Result<AppHealthReportRecord> {
+    Ok(AppHealthReportRecord {
+        app_id: row.get(0)?,
+        status: row.get(1)?,
+        message: row.get(2)?,
+        metrics_json: row.get(3)?,
+        reported_at_unix_ms: row.get(4)?,
+    })
+}
+
+fn row_to_config_version(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConfigVersionRecord> {
+    Ok(ConfigVersionRecord {
+        scope: row.get(0)?,
+        key: row.get(1)?,
+        version: row.get(2)?,
+        value_json: row.get(3)?,
+        signature: row.get(4)?,
+    })
 }
 
 const SCHEMA_V1: &str = "
@@ -545,6 +894,37 @@ CREATE TABLE IF NOT EXISTS capability_profile_cache (
     profile_json TEXT NOT NULL,
     detected_at_unix_ms INTEGER NOT NULL
 );
+";
+
+const SCHEMA_V2: &str = "
+CREATE TABLE IF NOT EXISTS app_sessions (
+    app_id TEXT PRIMARY KEY,
+    app_name TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    session_token_hash TEXT NOT NULL,
+    capabilities_json TEXT NOT NULL DEFAULT '[]',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    device_id TEXT NOT NULL,
+    registered_at_unix_ms INTEGER NOT NULL,
+    expires_at_unix_ms INTEGER NOT NULL,
+    last_heartbeat_unix_ms INTEGER NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_sessions_app_name ON app_sessions(app_name);
+CREATE INDEX IF NOT EXISTS idx_app_sessions_expires_at ON app_sessions(expires_at_unix_ms);
+
+CREATE TABLE IF NOT EXISTS app_health_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    reported_at_unix_ms INTEGER NOT NULL,
+    FOREIGN KEY(app_id) REFERENCES app_sessions(app_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_health_reported_at ON app_health_reports(reported_at_unix_ms);
 ";
 
 fn row_to_audit_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEvent> {

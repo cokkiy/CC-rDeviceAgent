@@ -1,7 +1,7 @@
-//! Tags Store - CRUD Operations for Tags and Station Tags
+//! Tags Store - CRUD Operations for Tags and Device Tags
 //!
 //! This module provides persistent storage and CRUD operations for tags
-//! and station-tag assignments.
+//! and device-tag assignments.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use rusqlite::{Connection, params};
 use uuid::Uuid;
 
 use crate::tags::{
-    StationTag, StationTagFilter, StationTagSortField, Tag, TagFilter, TagSortField, TagStats,
+    DeviceTag, DeviceTagFilter, DeviceTagSortField, Tag, TagFilter, TagSortField, TagStats,
 };
 
 /// In-memory cache for tags
@@ -139,105 +139,105 @@ impl Default for TagCache {
     }
 }
 
-/// In-memory cache for station tags
-pub struct StationTagCache {
-    station_tags: RwLock<HashMap<String, Vec<StationTag>>>, // station_id -> tags
-    tag_stations: RwLock<HashMap<Uuid, Vec<StationTag>>>,   // tag_id -> stations
+/// In-memory cache for device tags
+pub struct DeviceTagCache {
+    device_tags: RwLock<HashMap<String, Vec<DeviceTag>>>, // device_id -> tags
+    tag_devices: RwLock<HashMap<Uuid, Vec<DeviceTag>>>,   // tag_id -> devices
 }
 
-impl StationTagCache {
+impl DeviceTagCache {
     pub fn new() -> Self {
         Self {
-            station_tags: RwLock::new(HashMap::new()),
-            tag_stations: RwLock::new(HashMap::new()),
+            device_tags: RwLock::new(HashMap::new()),
+            tag_devices: RwLock::new(HashMap::new()),
         }
     }
 
-    pub fn get_by_station(&self, station_id: &str) -> Vec<StationTag> {
-        self.station_tags
+    pub fn get_by_device(&self, device_id: &str) -> Vec<DeviceTag> {
+        self.device_tags
             .read()
             .ok()
-            .and_then(|tags| tags.get(station_id).cloned())
+            .and_then(|tags| tags.get(device_id).cloned())
             .unwrap_or_default()
     }
 
-    pub fn get_by_tag(&self, tag_id: &Uuid) -> Vec<StationTag> {
-        self.tag_stations
+    pub fn get_by_tag(&self, tag_id: &Uuid) -> Vec<DeviceTag> {
+        self.tag_devices
             .read()
             .ok()
             .and_then(|tags| tags.get(tag_id).cloned())
             .unwrap_or_default()
     }
 
-    pub fn get_all(&self) -> Vec<StationTag> {
-        self.station_tags
+    pub fn get_all(&self) -> Vec<DeviceTag> {
+        self.device_tags
             .read()
             .map(|tags| tags.values().flatten().cloned().collect())
             .unwrap_or_default()
     }
 
-    pub fn insert(&self, station_tag: StationTag) {
-        let station_id = station_tag.station_id.clone();
-        let tag_id = station_tag.tag_id;
+    pub fn insert(&self, device_tag: DeviceTag) {
+        let device_id = device_tag.device_id.clone();
+        let tag_id = device_tag.tag_id;
 
-        // Add to station_tags
-        let mut station_tags = self.station_tags.write().unwrap();
-        station_tags
-            .entry(station_id.clone())
+        // Add to device_tags
+        let mut device_tags = self.device_tags.write().unwrap();
+        device_tags
+            .entry(device_id.clone())
             .or_default()
-            .push(station_tag.clone());
-        drop(station_tags);
+            .push(device_tag.clone());
+        drop(device_tags);
 
-        // Add to tag_stations
-        let mut tag_stations = self.tag_stations.write().unwrap();
-        tag_stations.entry(tag_id).or_default().push(station_tag);
+        // Add to tag_devices
+        let mut tag_devices = self.tag_devices.write().unwrap();
+        tag_devices.entry(tag_id).or_default().push(device_tag);
     }
 
-    pub fn remove(&self, station_id: &str, tag_id: &Uuid) -> Option<StationTag> {
-        // Remove from station_tags
-        let mut station_tags = self.station_tags.write().unwrap();
-        let removed = station_tags.get_mut(station_id).and_then(|tags| {
+    pub fn remove(&self, device_id: &str, tag_id: &Uuid) -> Option<DeviceTag> {
+        // Remove from device_tags
+        let mut device_tags = self.device_tags.write().unwrap();
+        let removed = device_tags.get_mut(device_id).and_then(|tags| {
             tags.iter()
                 .position(|t| t.tag_id == *tag_id)
                 .map(|idx| tags.remove(idx))
         });
-        drop(station_tags);
+        drop(device_tags);
 
-        // Remove from tag_stations
+        // Remove from tag_devices
         if let Some(removed_tag) = &removed {
-            let mut tag_stations = self.tag_stations.write().unwrap();
-            if let Some(stations) = tag_stations.get_mut(&removed_tag.tag_id) {
-                stations.retain(|t| t.station_id != station_id || t.tag_id != *tag_id);
+            let mut tag_devices = self.tag_devices.write().unwrap();
+            if let Some(devices) = tag_devices.get_mut(&removed_tag.tag_id) {
+                devices.retain(|t| t.device_id != device_id || t.tag_id != *tag_id);
             }
         }
 
         removed
     }
 
-    pub fn remove_by_station(&self, station_id: &str) -> Vec<StationTag> {
-        let mut station_tags = self.station_tags.write().unwrap();
-        let removed = station_tags.remove(station_id).unwrap_or_default();
-        drop(station_tags);
+    pub fn remove_by_device(&self, device_id: &str) -> Vec<DeviceTag> {
+        let mut device_tags = self.device_tags.write().unwrap();
+        let removed = device_tags.remove(device_id).unwrap_or_default();
+        drop(device_tags);
 
-        // Remove from tag_stations
-        let mut tag_stations = self.tag_stations.write().unwrap();
+        // Remove from tag_devices
+        let mut tag_devices = self.tag_devices.write().unwrap();
         for tag in &removed {
-            if let Some(stations) = tag_stations.get_mut(&tag.tag_id) {
-                stations.retain(|t| t.station_id != station_id);
+            if let Some(devices) = tag_devices.get_mut(&tag.tag_id) {
+                devices.retain(|t| t.device_id != device_id);
             }
         }
 
         removed
     }
 
-    pub fn filter(&self, filter: &StationTagFilter) -> Vec<StationTag> {
-        let all_tags: Vec<StationTag> = self.get_all();
+    pub fn filter(&self, filter: &DeviceTagFilter) -> Vec<DeviceTag> {
+        let all_tags: Vec<DeviceTag> = self.get_all();
 
-        let mut filtered: Vec<StationTag> = all_tags
+        let mut filtered: Vec<DeviceTag> = all_tags
             .into_iter()
             .filter(|st| {
-                if let Some(station_id) = &filter.station_id
-                    && &st.station_id != station_id
+                if let Some(device_id) = &filter.device_id
+                    && &st.device_id != device_id
                 {
                     return false;
                 }
@@ -255,9 +255,9 @@ impl StationTagCache {
         let sort_desc = filter.sort_desc;
         filtered.sort_by(|a, b| {
             let cmp = match sort_by {
-                StationTagSortField::AssignedAt => a.assigned_at.cmp(&b.assigned_at),
-                StationTagSortField::StationId => a.station_id.cmp(&b.station_id),
-                StationTagSortField::TagId => a.tag_id.cmp(&b.tag_id),
+                DeviceTagSortField::AssignedAt => a.assigned_at.cmp(&b.assigned_at),
+                DeviceTagSortField::DeviceId => a.device_id.cmp(&b.device_id),
+                DeviceTagSortField::TagId => a.tag_id.cmp(&b.tag_id),
             };
             if sort_desc { cmp.reverse() } else { cmp }
         });
@@ -273,14 +273,14 @@ impl StationTagCache {
     }
 
     pub fn total_assignments(&self) -> u64 {
-        self.station_tags
+        self.device_tags
             .read()
             .map(|tags| tags.values().map(|v| v.len()).sum::<usize>() as u64)
             .unwrap_or(0)
     }
 }
 
-impl Default for StationTagCache {
+impl Default for DeviceTagCache {
     fn default() -> Self {
         Self::new()
     }
@@ -289,7 +289,7 @@ impl Default for StationTagCache {
 /// Tag store with SQLite persistence.
 pub struct TagStore {
     cache: Arc<TagCache>,
-    station_tag_cache: Arc<StationTagCache>,
+    device_tag_cache: Arc<DeviceTagCache>,
     db_path: PathBuf,
 }
 
@@ -298,7 +298,7 @@ impl TagStore {
     pub fn new(db_path: PathBuf) -> Result<Self> {
         let store = Self {
             cache: Arc::new(TagCache::new()),
-            station_tag_cache: Arc::new(StationTagCache::new()),
+            device_tag_cache: Arc::new(DeviceTagCache::new()),
             db_path,
         };
         store.init_db()?;
@@ -310,6 +310,8 @@ impl TagStore {
     fn init_db(&self) -> Result<()> {
         let conn = Connection::open(&self.db_path)
             .with_context(|| format!("open tag store DB at {}", self.db_path.display()))?;
+
+        migrate_tag_device_schema(&conn)?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS tags (
@@ -327,31 +329,31 @@ impl TagStore {
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)", [])?;
 
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS station_tags (
+            "CREATE TABLE IF NOT EXISTS device_tags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                station_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
                 tag_id TEXT NOT NULL,
                 assigned_at TEXT NOT NULL,
                 assigned_by TEXT,
-                UNIQUE(station_id, tag_id)
+                UNIQUE(device_id, tag_id)
             )",
             [],
         )?;
 
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_station_tags_station_id ON station_tags(station_id)",
+            "CREATE INDEX IF NOT EXISTS idx_device_tags_device_id ON device_tags(device_id)",
             [],
         )?;
 
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_station_tags_tag_id ON station_tags(tag_id)",
+            "CREATE INDEX IF NOT EXISTS idx_device_tags_tag_id ON device_tags(tag_id)",
             [],
         )?;
 
         Ok(())
     }
 
-    /// Load tags and station tags from the database into cache.
+    /// Load tags and device tags from the database into cache.
     fn load_from_db(&self) -> Result<()> {
         let conn = Connection::open(&self.db_path)
             .with_context(|| format!("open tag store DB at {}", self.db_path.display()))?;
@@ -386,15 +388,15 @@ impl TagStore {
             }
         }
 
-        // Load station tags
+        // Load device tags
         let mut stmt =
-            conn.prepare("SELECT station_id, tag_id, assigned_at, assigned_by FROM station_tags")?;
+            conn.prepare("SELECT device_id, tag_id, assigned_at, assigned_by FROM device_tags")?;
 
-        let station_tag_rows: Vec<StationTagRowData> = stmt
+        let device_tag_rows: Vec<DeviceTagRowData> = stmt
             .query_map([], |row| {
                 let assigned_at_str: String = row.get(2)?;
-                Ok(StationTagRowData {
-                    station_id: row.get(0)?,
+                Ok(DeviceTagRowData {
+                    device_id: row.get(0)?,
                     tag_id: row.get(1)?,
                     assigned_at: assigned_at_str,
                     assigned_by: row.get(3)?,
@@ -403,9 +405,9 @@ impl TagStore {
             .filter_map(|r| r.ok())
             .collect();
 
-        for data in station_tag_rows {
-            if let Ok(station_tag) = self.row_data_to_station_tag(data) {
-                self.station_tag_cache.insert(station_tag);
+        for data in device_tag_rows {
+            if let Ok(device_tag) = self.row_data_to_device_tag(data) {
+                self.device_tag_cache.insert(device_tag);
             }
         }
 
@@ -431,13 +433,13 @@ impl TagStore {
         })
     }
 
-    fn row_data_to_station_tag(&self, data: StationTagRowData) -> Result<StationTag> {
+    fn row_data_to_device_tag(&self, data: DeviceTagRowData) -> Result<DeviceTag> {
         let assigned_at = DateTime::parse_from_rfc3339(&data.assigned_at)
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
 
-        Ok(StationTag {
-            station_id: data.station_id,
+        Ok(DeviceTag {
+            device_id: data.device_id,
             tag_id: Uuid::parse_str(&data.tag_id).unwrap_or_else(|_| Uuid::new_v4()),
             assigned_at,
             assigned_by: data.assigned_by,
@@ -519,9 +521,9 @@ impl TagStore {
         let affected = conn.execute("DELETE FROM tags WHERE id = ?1", [id.to_string()])?;
 
         if affected > 0 {
-            // Also delete all station-tag assignments for this tag
+            // Also delete all device-tag assignments for this tag
             conn.execute(
-                "DELETE FROM station_tags WHERE tag_id = ?1",
+                "DELETE FROM device_tags WHERE tag_id = ?1",
                 [id.to_string()],
             )?;
             Ok(self.cache.remove(id))
@@ -535,88 +537,123 @@ impl TagStore {
         self.cache.filter(filter)
     }
 
-    // Station Tag CRUD Operations
+    // Device Tag CRUD Operations
 
-    /// Assign a tag to a station.
-    pub fn assign_tag(&self, station_tag: &StationTag) -> Result<()> {
+    /// Assign a tag to a device.
+    pub fn assign_tag(&self, device_tag: &DeviceTag) -> Result<()> {
         let conn = Connection::open(&self.db_path)
             .with_context(|| format!("open tag store DB at {}", self.db_path.display()))?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO station_tags (station_id, tag_id, assigned_at, assigned_by)
+            "INSERT OR REPLACE INTO device_tags (device_id, tag_id, assigned_at, assigned_by)
              VALUES (?1, ?2, ?3, ?4)",
             params![
-                station_tag.station_id,
-                station_tag.tag_id.to_string(),
-                station_tag.assigned_at.to_rfc3339(),
-                station_tag.assigned_by,
+                device_tag.device_id,
+                device_tag.tag_id.to_string(),
+                device_tag.assigned_at.to_rfc3339(),
+                device_tag.assigned_by,
             ],
         )?;
 
-        self.station_tag_cache.insert(station_tag.clone());
+        self.device_tag_cache.insert(device_tag.clone());
         Ok(())
     }
 
-    /// Get tags for a station.
-    pub fn get_tags_for_station(&self, station_id: &str) -> Vec<StationTag> {
-        self.station_tag_cache.get_by_station(station_id)
+    /// Get tags for a device.
+    pub fn get_tags_for_device(&self, device_id: &str) -> Vec<DeviceTag> {
+        self.device_tag_cache.get_by_device(device_id)
     }
 
-    /// Get stations for a tag.
-    pub fn get_stations_for_tag(&self, tag_id: &Uuid) -> Vec<StationTag> {
-        self.station_tag_cache.get_by_tag(tag_id)
+    /// Get devices for a tag.
+    pub fn get_devices_for_tag(&self, tag_id: &Uuid) -> Vec<DeviceTag> {
+        self.device_tag_cache.get_by_tag(tag_id)
     }
 
-    /// Get all station-tag assignments.
-    pub fn get_all_station_tags(&self) -> Vec<StationTag> {
-        self.station_tag_cache.get_all()
+    /// Get all device-tag assignments.
+    pub fn get_all_device_tags(&self) -> Vec<DeviceTag> {
+        self.device_tag_cache.get_all()
     }
 
-    /// Remove a tag from a station.
-    pub fn remove_tag_from_station(
+    /// Remove a tag from a device.
+    pub fn remove_tag_from_device(
         &self,
-        station_id: &str,
+        device_id: &str,
         tag_id: &Uuid,
-    ) -> Result<Option<StationTag>> {
+    ) -> Result<Option<DeviceTag>> {
         let conn = Connection::open(&self.db_path)
             .with_context(|| format!("open tag store DB at {}", self.db_path.display()))?;
 
         let affected = conn.execute(
-            "DELETE FROM station_tags WHERE station_id = ?1 AND tag_id = ?2",
-            params![station_id, tag_id.to_string()],
+            "DELETE FROM device_tags WHERE device_id = ?1 AND tag_id = ?2",
+            params![device_id, tag_id.to_string()],
         )?;
 
         if affected > 0 {
-            Ok(self.station_tag_cache.remove(station_id, tag_id))
+            Ok(self.device_tag_cache.remove(device_id, tag_id))
         } else {
             Ok(None)
         }
     }
 
-    /// Remove all tags from a station.
-    pub fn remove_all_tags_from_station(&self, station_id: &str) -> Result<Vec<StationTag>> {
+    /// Remove all tags from a device.
+    pub fn remove_all_tags_from_device(&self, device_id: &str) -> Result<Vec<DeviceTag>> {
         let conn = Connection::open(&self.db_path)
             .with_context(|| format!("open tag store DB at {}", self.db_path.display()))?;
 
-        conn.execute(
-            "DELETE FROM station_tags WHERE station_id = ?1",
-            [station_id],
-        )?;
+        conn.execute("DELETE FROM device_tags WHERE device_id = ?1", [device_id])?;
 
-        Ok(self.station_tag_cache.remove_by_station(station_id))
+        Ok(self.device_tag_cache.remove_by_device(device_id))
     }
 
-    /// Filter station tags by criteria.
-    pub fn filter_station_tags(&self, filter: &StationTagFilter) -> Vec<StationTag> {
-        self.station_tag_cache.filter(filter)
+    /// Filter device tags by criteria.
+    pub fn filter_device_tags(&self, filter: &DeviceTagFilter) -> Vec<DeviceTag> {
+        self.device_tag_cache.filter(filter)
     }
 
     /// Get combined tag statistics.
     pub fn stats(&self) -> TagStats {
         let mut stats = self.cache.stats();
-        stats.total_assignments = self.station_tag_cache.total_assignments();
+        stats.total_assignments = self.device_tag_cache.total_assignments();
         stats
     }
+}
+
+fn migrate_tag_device_schema(conn: &Connection) -> Result<()> {
+    if table_exists(conn, "station_tags")? && !table_exists(conn, "device_tags")? {
+        conn.execute("ALTER TABLE station_tags RENAME TO device_tags", [])?;
+    }
+
+    if table_exists(conn, "device_tags")?
+        && column_exists(conn, "device_tags", "station_id")?
+        && !column_exists(conn, "device_tags", "device_id")?
+    {
+        conn.execute(
+            "ALTER TABLE device_tags RENAME COLUMN station_id TO device_id",
+            [],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for name in names {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[derive(Debug)]
@@ -631,8 +668,8 @@ struct TagRowData {
 }
 
 #[derive(Debug)]
-struct StationTagRowData {
-    station_id: String,
+struct DeviceTagRowData {
+    device_id: String,
     tag_id: String,
     assigned_at: String,
     assigned_by: Option<String>,
@@ -682,8 +719,8 @@ mod tests {
     }
 
     #[test]
-    fn test_station_tag_crud() {
-        let db_path = temp_dir().join("station_tag_test.db");
+    fn test_device_tag_crud() {
+        let db_path = temp_dir().join("device_tag_test.db");
         // Clean up any stale data from previous test runs
         std::fs::remove_file(db_path.clone()).ok();
         let store = TagStore::new(db_path.clone()).unwrap();
@@ -691,23 +728,23 @@ mod tests {
         let tag = Tag::new("Production");
         store.create_tag(&tag).unwrap();
 
-        // Assign tag to station
-        let station_tag = StationTag::new("station-1", tag.id).assigned_by("admin");
-        store.assign_tag(&station_tag).unwrap();
+        // Assign tag to device
+        let device_tag = DeviceTag::new("device-1", tag.id).assigned_by("admin");
+        store.assign_tag(&device_tag).unwrap();
 
-        // Get tags for station
-        let tags = store.get_tags_for_station("station-1");
+        // Get tags for device
+        let tags = store.get_tags_for_device("device-1");
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].tag_id, tag.id);
 
-        // Get stations for tag
-        let stations = store.get_stations_for_tag(&tag.id);
-        assert_eq!(stations.len(), 1);
-        assert_eq!(stations[0].station_id, "station-1");
+        // Get devices for tag
+        let devices = store.get_devices_for_tag(&tag.id);
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].device_id, "device-1");
 
-        // Remove tag from station
-        store.remove_tag_from_station("station-1", &tag.id).unwrap();
-        let tags = store.get_tags_for_station("station-1");
+        // Remove tag from device
+        store.remove_tag_from_device("device-1", &tag.id).unwrap();
+        let tags = store.get_tags_for_device("device-1");
         assert!(tags.is_empty());
 
         // Clean up
@@ -761,10 +798,10 @@ mod tests {
             let tag = Tag::new(format!("Tag {}", i));
             store.create_tag(&tag).unwrap();
 
-            // Assign to stations
+            // Assign to devices
             for j in 0..2 {
-                let station_tag = StationTag::new(format!("station-{}", j), tag.id);
-                store.assign_tag(&station_tag).unwrap();
+                let device_tag = DeviceTag::new(format!("device-{}", j), tag.id);
+                store.assign_tag(&device_tag).unwrap();
             }
         }
 
@@ -773,6 +810,36 @@ mod tests {
         assert_eq!(stats.total_assignments, 6);
 
         // Clean up
+        std::fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn migrates_legacy_station_tags() {
+        let db_path = temp_dir().join(format!("device_tag_migration_{}.db", Uuid::new_v4()));
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "
+                CREATE TABLE station_tags (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    station_id TEXT NOT NULL,
+                    tag_id TEXT NOT NULL,
+                    assigned_at TEXT NOT NULL,
+                    assigned_by TEXT,
+                    UNIQUE(station_id, tag_id)
+                );
+                ",
+            )
+            .unwrap();
+        }
+
+        let _store = TagStore::new(db_path.clone()).unwrap();
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(table_exists(&conn, "device_tags").unwrap());
+        assert!(!table_exists(&conn, "station_tags").unwrap());
+        assert!(column_exists(&conn, "device_tags", "device_id").unwrap());
+        assert!(!column_exists(&conn, "device_tags", "station_id").unwrap());
+
         std::fs::remove_file(db_path).ok();
     }
 }

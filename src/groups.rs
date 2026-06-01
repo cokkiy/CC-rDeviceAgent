@@ -1,24 +1,24 @@
-//! Station Groups Module
+//! Device Groups Module
 //!
-//! This module provides station group management for organizing stations
+//! This module provides device group management for organizing devices
 //! into logical groups for batch operations and targeting.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// A station group for organizing stations.
+/// A device group for organizing devices.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StationGroup {
+pub struct DeviceGroup {
     /// Unique identifier
     pub id: Uuid,
     /// Group name
     pub name: String,
     /// Group description
     pub description: Option<String>,
-    /// Station IDs belonging to this group
+    /// Device IDs belonging to this group
     #[serde(default)]
-    pub station_ids: Vec<String>,
+    pub device_ids: Vec<String>,
     /// Creation timestamp
     pub created_at: DateTime<Utc>,
     /// Last update timestamp
@@ -27,15 +27,15 @@ pub struct StationGroup {
     pub created_by: Option<String>,
 }
 
-impl StationGroup {
-    /// Create a new station group
+impl DeviceGroup {
+    /// Create a new device group
     pub fn new(name: impl Into<String>) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
             name: name.into(),
             description: None,
-            station_ids: Vec::new(),
+            device_ids: Vec::new(),
             created_at: now,
             updated_at: now,
             created_by: None,
@@ -54,59 +54,56 @@ impl StationGroup {
         self
     }
 
-    /// Add a station to the group
-    pub fn add_station(mut self, station_id: impl Into<String>) -> Self {
-        let station_id = station_id.into();
-        if !self.station_ids.contains(&station_id) {
-            self.station_ids.push(station_id);
+    /// Add a device to the group
+    pub fn add_device(mut self, device_id: impl Into<String>) -> Self {
+        let device_id = device_id.into();
+        if !self.device_ids.contains(&device_id) {
+            self.device_ids.push(device_id);
             self.updated_at = Utc::now();
         }
         self
     }
 
-    /// Add multiple stations to the group
-    pub fn add_stations(
-        mut self,
-        station_ids: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
-        for station_id in station_ids {
-            let station_id = station_id.into();
-            if !self.station_ids.contains(&station_id) {
-                self.station_ids.push(station_id);
+    /// Add multiple devices to the group
+    pub fn add_devices(mut self, device_ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        for device_id in device_ids {
+            let device_id = device_id.into();
+            if !self.device_ids.contains(&device_id) {
+                self.device_ids.push(device_id);
             }
         }
         self.updated_at = Utc::now();
         self
     }
 
-    /// Remove a station from the group
-    pub fn remove_station(mut self, station_id: &str) -> Self {
-        self.station_ids.retain(|id| id != station_id);
+    /// Remove a device from the group
+    pub fn remove_device(mut self, device_id: &str) -> Self {
+        self.device_ids.retain(|id| id != device_id);
         self.updated_at = Utc::now();
         self
     }
 
-    /// Check if the group contains a station
-    pub fn contains_station(&self, station_id: &str) -> bool {
-        self.station_ids.iter().any(|id| id == station_id)
+    /// Check if the group contains a device
+    pub fn contains_device(&self, device_id: &str) -> bool {
+        self.device_ids.iter().any(|id| id == device_id)
     }
 
-    /// Get the number of stations in the group
-    pub fn station_count(&self) -> usize {
-        self.station_ids.len()
+    /// Get the number of devices in the group
+    pub fn device_count(&self) -> usize {
+        self.device_ids.len()
     }
 }
 
-/// Filter options for querying station groups.
+/// Filter options for querying device groups.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct StationGroupFilter {
+pub struct DeviceGroupFilter {
     /// Filter by name (partial match)
     pub name: Option<String>,
     /// Filter by creator
     pub created_by: Option<String>,
     /// Sort by field
     #[serde(default)]
-    pub sort_by: StationGroupSortField,
+    pub sort_by: DeviceGroupSortField,
     /// Sort ascending or descending
     #[serde(default = "default_sort_desc")]
     pub sort_desc: bool,
@@ -126,25 +123,25 @@ fn default_limit() -> u64 {
     50
 }
 
-/// Fields that can be used for sorting station groups.
+/// Fields that can be used for sorting device groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
-pub enum StationGroupSortField {
+pub enum DeviceGroupSortField {
     #[default]
     CreatedAt,
     UpdatedAt,
     Name,
-    StationCount,
+    DeviceCount,
 }
 
-/// Statistics about station groups.
+/// Statistics about device groups.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct StationGroupStats {
+pub struct DeviceGroupStats {
     /// Total number of groups
     pub total_groups: u64,
-    /// Total stations across all groups
-    pub total_stations: u64,
-    /// Average stations per group
-    pub avg_stations_per_group: f64,
+    /// Total devices across all groups
+    pub total_devices: u64,
+    /// Average devices per group
+    pub avg_devices_per_group: f64,
 }
