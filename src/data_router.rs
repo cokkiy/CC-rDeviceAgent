@@ -29,7 +29,9 @@ pub fn validate_app_topic(topic: &str) -> Result<()> {
         return Err(anyhow!("invalid topic: {topic}"));
     }
     if topic.contains('#') || topic.contains('+') {
-        return Err(anyhow!("topic must not contain MQTT wildcard characters: {topic}"));
+        return Err(anyhow!(
+            "topic must not contain MQTT wildcard characters: {topic}"
+        ));
     }
     Ok(())
 }
