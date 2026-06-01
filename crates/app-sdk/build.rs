@@ -3,7 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         std::env::set_var("PROTOC", protoc);
     }
-    // Re-use the shared proto file from the workspace root
-    tonic_prost_build::configure().compile_protos(&["../../proto/app.proto"], &["../../proto"])?;
+    println!("cargo::rerun-if-changed=proto/app.proto");
+    tonic_prost_build::configure().compile_protos(&["proto/app.proto"], &["proto"])?;
     Ok(())
 }

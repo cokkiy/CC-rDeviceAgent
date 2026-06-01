@@ -1,0 +1,262 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name to release (e.g., v1.0.0-rc1)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  publish-app-sdk:
+    name: Publish App SDK To crates.io
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      SDK_CRATE: cc-rdeviceagent-app-sdk
+    steps:
+      - name: Resolve tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            echo "::error::Unsupported event: ${{ github.event_name }}"
+            exit 1
+          fi
+
+          if [ -z "$TAG" ]; then
+            echo "::error::Resolved tag name is empty"
+            exit 1
+          fi
+
+          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.tag.outputs.tag_name }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-publish
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb1-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxfixes-dev \
+            libxtst-dev
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Verify release tag matches workspace version
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import tomllib
+
+          with open("Cargo.toml", "rb") as f:
+              cargo_toml = tomllib.load(f)
+
+          version = cargo_toml["workspace"]["package"]["version"]
+          expected_tag = f"v{version}"
+          actual_tag = os.environ["RELEASE_TAG"]
+
+          if actual_tag != expected_tag:
+              print(
+                  f"Release tag mismatch: expected '{expected_tag}' from workspace.package.version, got '{actual_tag}'.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          PY
+
+      - name: Validate app SDK publish metadata
+        run: cargo publish --dry-run -p "$SDK_CRATE" --registry crates-io
+
+      - name: Check crates.io version
+        id: crates
+        env:
+          CRATE: ${{ env.SDK_CRATE }}
+        run: |
+          VERSION="$(cargo metadata --no-deps --format-version 1 | python -c 'import json, sys; data = json.load(sys.stdin); crate = sys.argv[1]; print(next(pkg["version"] for pkg in data["packages"] if pkg["name"] == crate))' "$CRATE")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          EXISTS="$(python - "$CRATE" "$VERSION" <<'PY'
+          import json
+          import sys
+          import urllib.error
+          import urllib.request
+
+          crate = sys.argv[1]
+          version = sys.argv[2]
+          url = f"https://crates.io/api/v1/crates/{crate}"
+          request = urllib.request.Request(
+              url,
+              headers={"User-Agent": "CC-rDeviceAgent release workflow"},
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  if response.status != 200:
+                      print(f"metadata request returned HTTP {response.status}", file=sys.stderr)
+                      sys.exit(2)
+                  data = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code == 404:
+                  print("false")
+                  sys.exit(0)
+              print(f"metadata request returned HTTP {error.code}", file=sys.stderr)
+              sys.exit(2)
+          except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+              print(f"metadata request failed: {error}", file=sys.stderr)
+              sys.exit(2)
+
+          print("true" if any(item.get("num") == version for item in data.get("versions", [])) else "false")
+          PY
+          )"
+
+          echo "already_published=$EXISTS" >> "$GITHUB_OUTPUT"
+
+      - name: Publish app SDK
+        if: steps.crates.outputs.already_published != 'true'
+        run: cargo publish -p "$SDK_CRATE" --registry crates-io
+
+      - name: Skip already published app SDK
+        if: steps.crates.outputs.already_published == 'true'
+        run: echo "::notice::$SDK_CRATE ${{ steps.crates.outputs.version }} is already on crates.io, skipping publish"
+
+  docker-release:
+    name: Build And Publish GHCR Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Resolve tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            echo "::error::Unsupported event: ${{ github.event_name }}"
+            exit 1
+          fi
+
+          if [ -z "$TAG" ]; then
+            echo "::error::Resolved tag name is empty"
+            exit 1
+          fi
+
+          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.tag.outputs.tag_name }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-docker
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb1-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxfixes-dev \
+            libxtst-dev
+
+      - name: Build release binary
+        run: cargo build --release --bin cc-rdeviceagent
+
+      - name: Verify binary version
+        run: |
+          BINARY_VERSION="$(./target/release/cc-rdeviceagent --version | awk '{print $2}')"
+          EXPECTED_VERSION="${{ steps.tag.outputs.tag_name }}"
+          EXPECTED_VERSION="${EXPECTED_VERSION#v}"
+
+          if [ "$BINARY_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::Binary version mismatch: expected $EXPECTED_VERSION, got $BINARY_VERSION"
+            exit 1
+          fi
+
+          echo "::notice::Binary version verified: $BINARY_VERSION"
+
+      - name: Prepare Docker context
+        run: |
+          mkdir -p "$RUNNER_TEMP/cc-rdeviceagent-docker"
+          cp packaging/docker/Dockerfile.iot-sim "$RUNNER_TEMP/cc-rdeviceagent-docker/Dockerfile"
+          cp packaging/docker/iot-sim-entrypoint.sh "$RUNNER_TEMP/cc-rdeviceagent-docker/iot-sim-entrypoint.sh"
+          cp packaging/docker/CC-rDeviceAgent.iot.toml.template "$RUNNER_TEMP/cc-rdeviceagent-docker/CC-rDeviceAgent.iot.toml.template"
+          cp target/release/cc-rdeviceagent "$RUNNER_TEMP/cc-rdeviceagent-docker/cc-rdeviceagent"
+          echo "context=$RUNNER_TEMP/cc-rdeviceagent-docker" >> "$GITHUB_OUTPUT"
+        id: docker-context
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set lowercase image name
+        run: echo "REGISTRY_IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.tag.outputs.tag_name }}
+            type=sha
+          labels: |
+            org.opencontainers.image.title=CC-rDeviceAgent
+            org.opencontainers.image.description=Rust device-side agent for managed workstations, edge devices, and IoT devices
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.tag_name }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ steps.docker-context.outputs.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
