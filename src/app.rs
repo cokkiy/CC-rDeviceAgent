@@ -15,6 +15,7 @@ use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
+use crate::app_lifecycle::{AppLifecycleHandle, AppManifest};
 use crate::app_platform::{AppPlatformService, AppPlatformState};
 use crate::config::AppConfig;
 use crate::config_manager::ConfigManager;
@@ -35,7 +36,7 @@ use crate::grpc::cc::{
 };
 use crate::health_evaluator::HealthEvaluator;
 use crate::platform;
-use crate::state::{AppState, find_process_ids_by_name, terminate_process};
+use crate::state::{AppState, find_process_ids_by_name};
 use crate::telemetry::{TelemetryProfileConfig, TelemetryScheduler};
 
 pub async fn run(
@@ -224,6 +225,8 @@ pub async fn run(
         state.device_id().to_string(),
     );
 
+    let lifecycle = crate::app_lifecycle::spawn_lifecycle_manager(platform::context()?);
+
     // Start southbound IPC server for payload applications if enabled
     let _app_platform_handle: Option<tokio::task::JoinHandle<Result<()>>> = if state
         .config()
@@ -241,6 +244,7 @@ pub async fn run(
         ));
         let (health_action_tx, mut health_action_rx) = tokio::sync::mpsc::channel(64);
         let health_evaluator = HealthEvaluator::new(health_action_tx);
+        let lifecycle_for_health = lifecycle.clone();
         tokio::spawn(async move {
             while let Some(action) = health_action_rx.recv().await {
                 warn!(
@@ -249,6 +253,18 @@ pub async fn run(
                     failures = action.consecutive_failures,
                     "App health action emitted"
                 );
+                if matches!(
+                    action.action,
+                    crate::health_evaluator::PolicyAction::Restart
+                        | crate::health_evaluator::PolicyAction::RestartThenAlert
+                ) && let Err(error) = lifecycle_for_health.restart(&action.app_id).await
+                {
+                    warn!(
+                        app_id = %action.app_id,
+                        error = %error,
+                        "failed to restart unhealthy app through lifecycle"
+                    );
+                }
             }
         });
         let mut app_platform_state =
@@ -257,7 +273,8 @@ pub async fn run(
                     state.config().app_platform.session_duration_secs.max(1),
                 ))
                 .with_config_manager(config_manager)
-                .with_health_evaluator(health_evaluator);
+                .with_health_evaluator(health_evaluator)
+                .with_lifecycle(lifecycle.clone());
         if let Some(mqtt_client) = state.mqtt_client().cloned() {
             app_platform_state =
                 app_platform_state.with_data_router(data_router, Arc::new(mqtt_client));
@@ -331,6 +348,8 @@ pub async fn run(
         .layer(security_layer)
         .add_service(DeviceControlServer::new(DeviceControlService {
             state: Arc::clone(&state),
+            lifecycle,
+            store_path: store_path.clone(),
         }))
         .add_service(FileTransferServer::new(FileTransferService {
             state: Arc::clone(&state),
@@ -361,6 +380,8 @@ fn read_required_file(path: Option<&Path>, field: &str) -> Result<Vec<u8>> {
 #[derive(Clone)]
 struct DeviceControlService {
     state: Arc<AppState>,
+    lifecycle: AppLifecycleHandle,
+    store_path: PathBuf,
 }
 
 #[tonic::async_trait]
@@ -374,7 +395,7 @@ impl DeviceControl for DeviceControlService {
     ) -> Result<Response<StartAppResponse>, Status> {
         let mut results = Vec::new();
         for app in request.into_inner().apps {
-            results.push(start_one_app(app).await);
+            results.push(self.start_one_app(app).await);
         }
 
         Ok(Response::new(StartAppResponse { results }))
@@ -386,9 +407,22 @@ impl DeviceControl for DeviceControlService {
     ) -> Result<Response<CloseAppResponse>, Status> {
         let mut results = Vec::new();
         for pid in request.into_inner().process_ids {
-            let result = match terminate_process(pid).map_err(status_from_error)? {
-                true => AppControlResult::Closed,
-                false => AppControlResult::NotRunning,
+            let result = if pid <= 0 {
+                AppControlResult::NotRunning
+            } else {
+                let lifecycle_app_id = self.lifecycle.find_app_by_pid(pid as u32).await;
+                match platform::terminate_process(pid as u32) {
+                    Ok(()) => {
+                        if let Some(app_id) = lifecycle_app_id {
+                            let _ = self.lifecycle.stop(&app_id).await;
+                        }
+                        AppControlResult::Closed
+                    }
+                    Err(error) => {
+                        warn!(pid, error = %error, "failed to terminate process through PAL");
+                        AppControlResult::NotRunning
+                    }
+                }
             };
             results.push(result as i32);
         }
@@ -402,13 +436,36 @@ impl DeviceControl for DeviceControlService {
     ) -> Result<Response<RestartAppResponse>, Status> {
         let mut results = Vec::new();
         for app in request.into_inner().apps {
-            for pid in find_process_ids_by_name(&effective_process_name(&app)) {
-                if let Err(error) = terminate_process(pid) {
-                    warn!(pid, error = %error, "failed to terminate process during restart");
+            let process_name = effective_process_name(&app);
+            let app_id = lifecycle_app_id(&app);
+            if self.lifecycle.get_state(&app_id).await.is_some() {
+                let result = match self.lifecycle.restart(&app_id).await {
+                    Ok(()) => AppStartingResult {
+                        param_id: app.param_id,
+                        process_id: 0,
+                        process_name,
+                        control_result: AppControlResult::Started as i32,
+                        result: "restarted".to_string(),
+                    },
+                    Err(error) => AppStartingResult {
+                        param_id: app.param_id,
+                        process_id: 0,
+                        process_name,
+                        control_result: AppControlResult::FailToStart as i32,
+                        result: error.to_string(),
+                    },
+                };
+                results.push(result);
+            } else {
+                for pid in find_process_ids_by_name(&process_name) {
+                    if pid > 0
+                        && let Err(error) = platform::terminate_process(pid as u32)
+                    {
+                        warn!(pid, error = %error, "failed to terminate process through PAL during restart");
+                    }
                 }
+                results.push(self.start_one_app(app).await);
             }
-
-            results.push(start_one_app(app).await);
         }
 
         Ok(Response::new(RestartAppResponse { results }))
@@ -688,9 +745,13 @@ impl DeviceControl for DeviceControlService {
                 }
                 let mut exit_code = 0;
                 for pid in &pids {
-                    if let Err(e) = crate::state::terminate_process(*pid) {
+                    if *pid <= 0 {
                         exit_code = 1;
-                        tracing::warn!(pid, error = %e, "failed to terminate process");
+                        continue;
+                    }
+                    if let Err(e) = crate::platform::terminate_process(*pid as u32) {
+                        exit_code = 1;
+                        tracing::warn!(pid, error = %e, "failed to terminate process through PAL");
                     }
                 }
                 Ok(Response::new(ExecuteCommandResponse {
@@ -857,37 +918,32 @@ impl FileTransfer for FileTransferService {
     }
 }
 
-async fn start_one_app(app: AppStartParameter) -> AppStartingResult {
-    let process_name = effective_process_name(&app);
-    if process_name.is_empty() || app.app_path.trim().is_empty() {
-        return AppStartingResult {
-            param_id: app.param_id,
-            process_id: 0,
-            process_name,
-            control_result: AppControlResult::FailToStart as i32,
-            result: "app_path is required".to_string(),
-        };
-    }
+impl DeviceControlService {
+    async fn start_one_app(&self, app: AppStartParameter) -> AppStartingResult {
+        let process_name = effective_process_name(&app);
+        if process_name.is_empty() || app.app_path.trim().is_empty() {
+            return AppStartingResult {
+                param_id: app.param_id,
+                process_id: 0,
+                process_name,
+                control_result: AppControlResult::FailToStart as i32,
+                result: "app_path is required".to_string(),
+            };
+        }
 
-    if !app.allow_multi_instance
-        && let Some(existing) = find_process_ids_by_name(&process_name).into_iter().next()
-    {
-        return AppStartingResult {
-            param_id: app.param_id,
-            process_id: existing,
-            process_name,
-            control_result: AppControlResult::AlreadyRunning as i32,
-            result: "process already running".to_string(),
-        };
-    }
+        if !app.allow_multi_instance
+            && let Some(existing) = find_process_ids_by_name(&process_name).into_iter().next()
+        {
+            return AppStartingResult {
+                param_id: app.param_id,
+                process_id: existing,
+                process_name,
+                control_result: AppControlResult::AlreadyRunning as i32,
+                result: "process already running".to_string(),
+            };
+        }
 
-    let mut command = tokio::process::Command::new(&app.app_path);
-    if let Some(parent) = Path::new(&app.app_path).parent() {
-        command.current_dir(parent);
-    }
-
-    if !app.arguments.trim().is_empty() {
-        let Some(arguments) = shlex::split(&app.arguments) else {
+        let Some(args) = parse_app_arguments(&app) else {
             return AppStartingResult {
                 param_id: app.param_id,
                 process_id: 0,
@@ -896,24 +952,67 @@ async fn start_one_app(app: AppStartParameter) -> AppStartingResult {
                 result: "failed to parse arguments".to_string(),
             };
         };
-        command.args(arguments);
+
+        let app_id = lifecycle_app_id(&app);
+        let executable = PathBuf::from(&app.app_path);
+        let work_dir = executable
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let manifest = AppManifest {
+            app_id: app_id.clone(),
+            app_name: process_name.clone(),
+            version: "runtime".to_string(),
+            executable,
+            work_dir,
+            args,
+            env: std::collections::HashMap::new(),
+            max_restarts: 3,
+            restart_backoff_secs: 1,
+            memory_limit_mb: None,
+            cpu_limit_pct: None,
+        };
+
+        if let Err(error) = self.persist_lifecycle_manifest(&manifest) {
+            warn!(app_id = %app_id, error = %error, "failed to persist lifecycle manifest");
+        }
+
+        let result = async {
+            self.lifecycle.install(manifest).await?;
+            self.lifecycle.start(&app_id).await
+        }
+        .await;
+
+        match result {
+            Ok(()) => AppStartingResult {
+                param_id: app.param_id,
+                process_id: 0,
+                process_name,
+                control_result: AppControlResult::Started as i32,
+                result: "started".to_string(),
+            },
+            Err(error) => AppStartingResult {
+                param_id: app.param_id,
+                process_id: 0,
+                process_name,
+                control_result: AppControlResult::FailToStart as i32,
+                result: error.to_string(),
+            },
+        }
     }
 
-    match command.spawn() {
-        Ok(child) => AppStartingResult {
-            param_id: app.param_id,
-            process_id: child.id().unwrap_or_default() as i32,
-            process_name,
-            control_result: AppControlResult::Started as i32,
-            result: "started".to_string(),
-        },
-        Err(error) => AppStartingResult {
-            param_id: app.param_id,
-            process_id: 0,
-            process_name,
-            control_result: AppControlResult::FailToStart as i32,
-            result: error.to_string(),
-        },
+    fn persist_lifecycle_manifest(&self, manifest: &AppManifest) -> Result<()> {
+        let manifest_json = serde_json::to_string(manifest)?;
+        let record = agent_store::AppManifestRecord {
+            app_id: manifest.app_id.clone(),
+            version: manifest.version.clone(),
+            manifest_json,
+        };
+        agent_store::StateStore::open(&self.store_path)
+            .with_context(|| format!("open state store at {}", self.store_path.display()))?
+            .upsert_app_manifest(&record)
+            .context("persist app lifecycle manifest")?;
+        Ok(())
     }
 }
 
@@ -1003,6 +1102,37 @@ fn effective_process_name(app: &AppStartParameter) -> String {
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_string()
+}
+
+fn lifecycle_app_id(app: &AppStartParameter) -> String {
+    let base = effective_process_name(app);
+    if base.is_empty() {
+        format!("runtime_app_{}", app.param_id)
+    } else {
+        format!("runtime_{}_{}", sanitize_app_id_component(&base), app.param_id)
+    }
+}
+
+fn sanitize_app_id_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    sanitized.trim_matches('_').to_string()
+}
+
+fn parse_app_arguments(app: &AppStartParameter) -> Option<Vec<String>> {
+    if app.arguments.trim().is_empty() {
+        Some(Vec::new())
+    } else {
+        shlex::split(&app.arguments)
+    }
 }
 
 async fn finalize_upload(path: Option<PathBuf>, file: Option<File>) -> Result<(), Status> {
