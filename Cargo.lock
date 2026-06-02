@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agent-cli"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "agent-core",
  "agent-telemetry",
@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "agent-core"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "http",
  "hyper",
@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "agent-protocols"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "prost",
  "tonic",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "agent-store"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "agent-core",
  "chrono",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "agent-telemetry"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -313,7 +313,7 @@ dependencies = [
 
 [[package]]
 name = "cc-rdeviceagent"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "agent-core",
  "agent-store",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "cc-rdeviceagent-app-sdk"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "anyhow",
  "hyper-util",
@@ -1312,7 +1312,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "pal-core"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -1321,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "pal-fallback"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "pal-core",
  "tracing",
@@ -1329,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "pal-linux"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "libc",
  "nix",
@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "pal-macos"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "pal-core",
  "pal-fallback",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "pal-mock"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "pal-core",
  "pal-fallback",
@@ -1356,7 +1356,7 @@ dependencies = [
 
 [[package]]
 name = "pal-windows"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "pal-core",
  "pal-fallback",
@@ -1371,7 +1371,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "payload-hello"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "anyhow",
  "cc-rdeviceagent-app-sdk",
