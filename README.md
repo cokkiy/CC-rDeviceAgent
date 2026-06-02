@@ -1,5 +1,14 @@
 # CC-rDeviceAgent
 
+[![CI](https://github.com/cokkiy/CC-rDeviceAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/cokkiy/CC-rDeviceAgent/actions/workflows/ci.yml)
+[![Create Release](https://github.com/cokkiy/CC-rDeviceAgent/actions/workflows/create-release.yml/badge.svg)](https://github.com/cokkiy/CC-rDeviceAgent/actions/workflows/create-release.yml)
+[![Publish](https://github.com/cokkiy/CC-rDeviceAgent/actions/workflows/release.yml/badge.svg)](https://github.com/cokkiy/CC-rDeviceAgent/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/cokkiy/CC-rDeviceAgent?include_prereleases&sort=semver)](https://github.com/cokkiy/CC-rDeviceAgent/releases)
+[![Crates.io](https://img.shields.io/crates/v/cc-rdeviceagent-app-sdk.svg?label=app-sdk)](https://crates.io/crates/cc-rdeviceagent-app-sdk)
+[![GHCR](https://img.shields.io/badge/GHCR-cc--rdeviceagent-blue?logo=github)](https://github.com/cokkiy/CC-rDeviceAgent/pkgs/container/cc-rdeviceagent)
+[![Rust 2024](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/github/license/cokkiy/CC-rDeviceAgent)](LICENSE)
+
 Rust device-side agent for managed workstations, edge devices, and IoT devices.
 
 CC-rDeviceAgent adopts a **dual-sided, three-layer** architecture — facing the management backend northbound and payload applications southbound. The three layers are: Protocol Layer, Core Services Layer, and Platform Abstraction Layer (PAL). The goal is a **lightweight, secure, cross-platform** device agent that provides both device management capabilities (L1) and application platform capabilities (L2).
@@ -55,24 +64,64 @@ See [`doc/architecture-zh.md`](doc/architecture-zh.md) for detailed architecture
 
 ---
 
-## Current Status (v0.4)
+## Current Status (1.0-beta)
 
 ### What the service does
 
-The main service exposes two protobuf services:
+The service has moved past the v0.4 device-control baseline and now tracks the
+Phase 2 state in [`doc/action_plan-v2.0-zh.md`](doc/action_plan-v2.0-zh.md):
+the application platform and OTA design prototype are wired, but the release is
+not yet v1.0 GA.
+
+The northbound service exposes these protobuf services:
 
 - **`DeviceControl`**
   - start, stop, and restart processes
   - reboot or shut down the host
   - return system state, process lists, network interfaces, TCP/UDP listeners, and version info
-  - execute shell commands with a timeout
+  - reject raw shell execution by default; control operations go through command policy
   - update watched process names and the in-memory state gathering interval
   - return the telemetry schema and replace MQTT telemetry profiles at runtime
 - **`FileTransfer`**
   - upload files as streamed chunks
   - download files as streamed chunks
+  - enforce managed path resolution and file size / free-space checks
 
-The service listens on `control.listen_addr`, which is `0.0.0.0:50051` in the sample config.
+The southbound application platform exposes **`AppPlatform`** over local IPC:
+
+- register and unregister payload applications
+- issue short-lived session tokens and validate app sessions
+- accept heartbeats and health reports
+- publish app data upstream and subscribe to downlink data
+- read and watch device / agent / app scoped configuration
+
+The service listens for northbound control on `control.listen_addr`, which is
+`0.0.0.0:50051` in the sample config. When `app_platform.enabled = true`, the
+southbound AppPlatform server listens on the configured Unix-domain socket on
+Linux/macOS; Windows Named Pipe support is still a stub in this beta.
+
+### Implemented beta capabilities
+
+The 1.0-beta line includes the following Phase 0-2 work:
+
+- PAL workspace split with `pal-core`, Linux / Windows / macOS skeletons,
+  fallback implementations, mock adapters, and capability probing
+- SQLite State Store with WAL, migrations, app/session/config/audit/upgrade state
+  tables, backup/restore, and persisted capability cache
+- Security Center primitives: mTLS configuration, X.509 identity extraction,
+  RBAC model, replay guard, command whitelist, Ed25519 verification, HKDF helpers,
+  and audit hash chain persistence
+- App Registry and AppPlatform session lifecycle with registration, heartbeat,
+  health report, data publish, config read/watch, and unregister flows
+- App Lifecycle prototype with state machine, executable path validation, async
+  lifecycle command channel, status query, and list support
+- Data Router prototype for app uplink topics and in-process downlink registry
+- Config Manager with device / agent / app scopes, versioning, set/get/delete,
+  snapshots, watcher support, and tombstone persistence
+- Upgrade Engine application-level prototype with OTA state machine, manifest
+  model, strategy trait, SHA-256 verification, optional Ed25519 verification,
+  state persistence, activation, rollback, and post-check flow
+- Rust payload SDK in `crates/app-sdk` and the `examples/payload-hello` example
 
 ### MQTT behavior
 
@@ -82,9 +131,11 @@ When `mqtt.enabled = true`, the service can:
 - publish telemetry bundles to `cc/<device_id>/telemetry`
 - subscribe to `cc/<device_id>/command`
 - publish command acknowledgements to `cc/<device_id>/command/ack`
+- publish app uplink data to app-scoped topics
 
 The currently implemented MQTT command handler supports `restart_process` with a
-`process_name` parameter.
+`process_name` parameter. The command is validated through the command policy
+path; raw shell execution remains disabled.
 
 Telemetry profiles are validated and normalized from configuration or replaced at
 runtime through gRPC. The supported telemetry include keys are:
@@ -98,17 +149,18 @@ runtime through gRPC. The supported telemetry include keys are:
 If no telemetry profiles are configured, the service synthesizes a default profile
 that includes all of the sections above and uses the service state interval.
 
-### Known gaps (v0.4 → target architecture)
+### Beta gaps before v1.0 GA
 
-| Gap                                 | Severity | Target    |
-| ----------------------------------- | -------- | --------- |
-| No platform abstraction layer (PAL) | 🔴 High   | Phase 0   |
-| No Upgrade Engine (OTA)             | 🔴 High   | Phase 2-3 |
-| No Security Center / mTLS           | 🔴 High   | Phase 1   |
-| No Audit Chain                      | 🔴 High   | Phase 1   |
-| No App Registry / Lifecycle         | 🔴 High   | Phase 2   |
-| No Config Manager                   | 🟡 Medium | Phase 2   |
-| No unit tests or CI                 | 🟡 Medium | Phase 0   |
+| Gap                                                             | Severity | Target closeout |
+| --------------------------------------------------------------- | -------- | --------------- |
+| App lifecycle still uses direct process spawning, not full PAL   | 🔴 High   | Phase 2         |
+| AppPlatform RBAC / Audit Chain mapping is not complete          | 🔴 High   | Phase 2         |
+| Complete running-agent E2E test with payload app and MQTT mock   | 🔴 High   | Phase 2         |
+| Performance baseline is not measured                            | 🔴 High   | Phase 2         |
+| Package unpacking, manifest parsing, and install config missing  | 🟡 Medium | Phase 2         |
+| Resource isolation / quotas via PAL ResourceLimiter incomplete   | 🟡 Medium | Phase 2         |
+| OTA package extraction, health checks, and anti-rollback missing | 🟡 Medium | Phase 2-3       |
+| Certificate hot reload, sandboxing, and three-platform security PAL remain partial | 🟡 Medium | Phase 1-2 |
 
 ---
 
@@ -117,10 +169,11 @@ that includes all of the sections above and uses the service state interval.
 See [`doc/action_plan-v2.0-zh.md`](doc/action_plan-v2.0-zh.md) for the full action plan.
 
 ```
-Phase -1 (v0.4)  Architecture gap analysis & fixes   2 weeks  ← Current
-Phase 0  (v0.5)  Foundation + PAL complete contracts  5 weeks
-Phase 1  (v0.8)  Security hardening                   6 weeks
-Phase 2  (v1.0)  Application platform + OTA design    8 weeks
+Phase -1 (v0.4)       Architecture gap analysis & fixes   Complete
+Phase 0  (v0.5)       Foundation + PAL contracts          Complete / partial platform adapters
+Phase 1  (v0.8)       Security hardening                  Substantially implemented / beta gaps remain
+Phase 2  (1.0-beta)   Application platform + OTA design   Current beta track
+Phase 2  (v1.0 GA)    App platform GA closeout            E2E, performance, PAL/RBAC/Audit closeout
 Phase 3  (v1.5)  Full OTA upgrade                    10 weeks
 Phase 4  (v2.0)  Platformization                     10 weeks
 Phase 5  (v2.1)  Production readiness                 6 weeks
@@ -128,15 +181,16 @@ Phase 5  (v2.1)  Production readiness                 6 weeks
 
 ### Key milestones
 
-| Phase | Version | Focus                     | Key deliverables                                               |
-| ----- | ------- | ------------------------- | -------------------------------------------------------------- |
-| -1    | v0.4    | Architecture gap analysis | Migration design, CI pipeline, clean baseline                  |
-| 0     | v0.5    | Foundation + PAL          | Full PAL traits, Linux adapter, State Store, CapabilityProfile |
-| 1     | v0.8    | Security                  | mTLS, KeyStore, RBAC, Audit Chain, Sandbox, command whitelist  |
-| 2     | v1.0    | Application platform      | IPC, App Registry, Lifecycle, Config Manager, OTA design       |
-| 3     | v1.5    | OTA upgrade               | A/B slot, Agent self-update, fault injection tests             |
-| 4     | v2.0    | Platformization           | Multi-tenant, canary release, extension points                 |
-| 5     | v2.1    | Production readiness      | SLA validation, security audit, documentation                  |
+| Phase | Version    | Focus                     | Status / key deliverables                                      |
+| ----- | ---------- | ------------------------- | -------------------------------------------------------------- |
+| -1    | v0.4       | Architecture gap analysis | Complete: migration design, CI pipeline, clean baseline        |
+| 0     | v0.5       | Foundation + PAL          | Complete core: PAL traits, State Store, CapabilityProfile      |
+| 1     | v0.8       | Security                  | Beta: mTLS, RBAC, Audit Chain, command policy; sandbox gaps    |
+| 2     | 1.0-beta   | Application platform      | Current: IPC, App Registry, Config Manager, OTA app prototype  |
+| 2     | v1.0 GA    | Application platform GA   | Pending: E2E, performance, PAL lifecycle, RBAC/Audit closeout  |
+| 3     | v1.5       | OTA upgrade               | Planned: A/B slot, Agent self-update, fault injection tests    |
+| 4     | v2.0       | Platformization           | Planned: multi-tenant, canary release, extension points        |
+| 5     | v2.1       | Production readiness      | Planned: SLA validation, security audit, documentation         |
 
 ---
 
