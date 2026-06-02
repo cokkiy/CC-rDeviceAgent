@@ -70,8 +70,8 @@ See [`doc/architecture-zh.md`](doc/architecture-zh.md) for detailed architecture
 
 The service has moved past the v0.4 device-control baseline and now tracks the
 Phase 2 state in [`doc/action_plan-v2.0-zh.md`](doc/action_plan-v2.0-zh.md):
-the application platform and OTA design prototype are wired, but the release is
-not yet v1.0 GA.
+the application platform and OTA design prototype are wired, with App Lifecycle
+now routed through PAL, but the release is not yet v1.0 GA.
 
 The northbound service exposes these protobuf services:
 
@@ -153,12 +153,11 @@ that includes all of the sections above and uses the service state interval.
 
 | Gap                                                             | Severity | Target closeout |
 | --------------------------------------------------------------- | -------- | --------------- |
-| App lifecycle still uses direct process spawning, not full PAL   | 🔴 High   | Phase 2         |
 | AppPlatform RBAC / Audit Chain mapping is not complete          | 🔴 High   | Phase 2         |
 | Complete running-agent E2E test with payload app and MQTT mock   | 🔴 High   | Phase 2         |
 | Performance baseline is not measured                            | 🔴 High   | Phase 2         |
 | Package unpacking, manifest parsing, and install config missing  | 🟡 Medium | Phase 2         |
-| Resource isolation / quotas via PAL ResourceLimiter incomplete   | 🟡 Medium | Phase 2         |
+| Production resource isolation / quota policy incomplete          | 🟡 Medium | Phase 2         |
 | OTA package extraction, health checks, and anti-rollback missing | 🟡 Medium | Phase 2-3       |
 | Certificate hot reload, sandboxing, and three-platform security PAL remain partial | 🟡 Medium | Phase 1-2 |
 

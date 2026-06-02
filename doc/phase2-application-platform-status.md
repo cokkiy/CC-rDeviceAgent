@@ -26,14 +26,14 @@ Phase 2 focuses on transforming CC-rDeviceAgent into an application platform by 
 
 | Objective | Description | Status |
 |-----------|-------------|--------|
-| **Application Platform** | Enable payload apps to run on devices using Agent as runtime | ⚠️ Not Started |
-| **IPC Foundation** | Southbound gRPC over UDS/Named Pipe with RBAC & audit | ⚠️ Not Started |
-| **Lifecycle Management** | App registration, installation, start/stop, monitoring, restart | ⚠️ Not Started |
-| **Data Routing** | Bidirectional data flow: app ↔ agent ↔ backend | ⚠️ Not Started |
-| **Config Management** | Three-tier config (device/agent/app) with versioning & rollback | ⚠️ Not Started |
-| **OTA Design** | Complete Upgrade Engine design + app-level prototype | ⚠️ Not Started |
-| **Terminology Migration** | Unified `device` naming across codebase | ⚠️ Not Started |
-| **SDK Delivery** | Rust SDK + sample app demonstrating platform capabilities | ⚠️ Not Started |
+| **Application Platform** | Enable payload apps to run on devices using Agent as runtime | 🔄 Partial |
+| **IPC Foundation** | Southbound gRPC over UDS/Named Pipe with RBAC & audit | 🔄 Partial |
+| **Lifecycle Management** | App registration, installation, PAL start/stop, health-triggered restart | 🔄 Partial |
+| **Data Routing** | Bidirectional data flow: app ↔ agent ↔ backend | 🔄 Partial |
+| **Config Management** | Three-tier config (device/agent/app) with versioning & rollback | 🔄 Partial |
+| **OTA Design** | Complete Upgrade Engine design + app-level prototype | 🔄 Partial |
+| **Terminology Migration** | Unified `device` naming across codebase | ✅ Complete |
+| **SDK Delivery** | Rust SDK + sample app demonstrating platform capabilities | 🔄 Partial |
 
 ---
 
