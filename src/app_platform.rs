@@ -480,14 +480,14 @@ impl AppPlatform for AppPlatformService {
             .revoke_app_session(&req.app_id)
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        if let Some(lifecycle) = self.state.lifecycle.as_ref() {
-            if let Err(error) = lifecycle.stop(&req.app_id).await {
-                tracing::warn!(
-                    app_id = %req.app_id,
-                    error = %error,
-                    "failed to stop lifecycle app during unregister"
-                );
-            }
+        if let Some(lifecycle) = self.state.lifecycle.as_ref()
+            && let Err(error) = lifecycle.stop(&req.app_id).await
+        {
+            tracing::warn!(
+                app_id = %req.app_id,
+                error = %error,
+                "failed to stop lifecycle app during unregister"
+            );
         }
 
         info!(app_id = %req.app_id, "Application unregistered");

@@ -485,12 +485,12 @@ async fn do_uninstall(
         .ok_or_else(|| anyhow!("unknown app: {}", app_id))?;
 
     // Stop first if running
-    if matches!(inst.state, AppState::Running | AppState::Starting) {
-        if let Some(pid) = inst.pid.take() {
-            pal.process_manager
-                .terminate(pid)
-                .context("terminate app process before uninstall through PAL")?;
-        }
+    if matches!(inst.state, AppState::Running | AppState::Starting)
+        && let Some(pid) = inst.pid.take()
+    {
+        pal.process_manager
+            .terminate(pid)
+            .context("terminate app process before uninstall through PAL")?;
     }
 
     inst.state = AppState::Uninstalled;
