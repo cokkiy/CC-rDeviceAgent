@@ -244,7 +244,9 @@ impl HealthEvaluator {
             "policy": policy_name,
             "consecutive_failures": action.consecutive_failures,
         }));
-        let _ = audit.writer.write_entry(event);
+        if let Err(e) = audit.writer.write_entry(event) {
+            warn!(error = %e, "audit write failed for health action");
+        }
     }
 
     pub fn consecutive_failures(&self, app_id: &str) -> u32 {

@@ -235,15 +235,7 @@ pub async fn run(
     {
         let app_platform_store = agent_store::StateStore::open(&store_path)
             .map_err(|e| anyhow::anyhow!("open state store for app platform: {e}"))?;
-        let app_platform_audit_store = Mutex::new(
-            agent_store::StateStore::open(&store_path)
-                .map_err(|e| anyhow::anyhow!("open state store for app platform audit: {e}"))?,
-        );
-        let app_platform_audit_sink: Arc<dyn agent_core::chain::AuditSink> =
-            Arc::new(StoreAuditSink {
-                store: app_platform_audit_store,
-            });
-        let app_platform_audit_writer = AuditWriter::new(app_platform_audit_sink);
+        let app_platform_audit_writer = AuditWriter::new(Arc::clone(&audit_sink));
         let app_platform_health_audit_writer = app_platform_audit_writer.clone();
         let app_platform_security_center = Arc::new(Mutex::new(BasicSecurityCenter::new(
             RbacPolicy::default(),

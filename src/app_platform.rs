@@ -14,7 +14,7 @@ use futures_util::Stream;
 use tokio::sync::mpsc;
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tonic::{Request, Response, Status};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[cfg(test)]
 use agent_core::chain::AuditSink;
@@ -120,6 +120,11 @@ fn digest_params(value: serde_json::Value) -> String {
     use ring::digest::{SHA256, digest};
     let bytes = serde_json::to_vec(&value).unwrap_or_default();
     base16::encode_lower(digest(&SHA256, &bytes).as_ref())
+}
+
+fn digest_bytes(bytes: &[u8]) -> String {
+    use ring::digest::{SHA256, digest};
+    base16::encode_lower(digest(&SHA256, bytes).as_ref())
 }
 
 fn generate_app_id(app_name: &str) -> String {
@@ -371,7 +376,9 @@ impl AppPlatformState {
                 &trace_id,
             );
             deny.params_digest = params_digest;
-            let _ = audit_writer.write_entry(deny);
+            if let Err(e) = audit_writer.write_entry(deny) {
+                warn!(error = %e, "audit write failed for rbac deny");
+            }
             return Err(Status::permission_denied("rbac deny"));
         }
 
@@ -737,10 +744,11 @@ impl AppPlatform for AppPlatformService {
         let req = request.into_inner();
         let principal = self.state.app_principal(&req.app_id);
         let target = format!("app:{}:topic:{}", req.app_id, req.topic);
+        let payload_sha256 = digest_bytes(&req.payload);
         let params_digest = digest_params(serde_json::json!({
             "app_id": req.app_id,
             "topic": req.topic,
-            "payload_sha256": digest_params(serde_json::json!({ "payload": req.payload })),
+            "payload_sha256": payload_sha256,
             "metadata": req.metadata,
         }));
 
