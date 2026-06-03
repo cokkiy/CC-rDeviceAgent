@@ -577,7 +577,30 @@ trait SecurityCenter {
 
 让设备成为载荷应用的运行平台 + **启动 Upgrade Engine 设计与原型**（提前介入，降低 Phase 3 风险）。
 
-> **实现状态更新（2026-06-02）**：Phase 2 已完成主要原型与关键链路接线；`cargo test` 通过（124 passed / 0 failed / 4 ignored）。当前状态不是 GA 完成：App Lifecycle 已接入 PAL ProcessManager / ResourceLimiter，并与 AppPlatform 注册、北向 Start/Restart、HealthEvaluator restart action 完成运行时接线；RBAC/Audit 全量接入、完整 E2E、性能基线、包安装解压与生产级资源隔离仍需收口。
+> **实现状态更新（2026-06-03）**：Phase 2 已完成主要原型与关键链路接线；`cargo test` 通过（131 passed / 0 failed / 4 ignored），`cargo clippy --workspace --all-targets -- -D warnings` 通过。当前状态不是 GA 完成：App Lifecycle 已接入 PAL ProcessManager / ResourceLimiter，并与 AppPlatform 注册、北向 Start/Restart、HealthEvaluator restart action 完成运行时接线；AppPlatform RPC 级 Session Token -> RBAC -> Audit Chain 映射已接入，完整 running-agent E2E、性能基线、包安装解压、动态策略加载与生产级资源隔离仍需收口。
+
+#### AppPlatform RBAC / Audit Chain 映射基线
+
+Phase 2 的南向 AppPlatform 属于架构中的“应用基座 SDK 接口”，但仍必须服从 5.4 责任链模式与 Security Center / Audit Chain 横切约束。南向 IPC 不做 TLS，安全链路固定为：
+
+`UDS / Named Pipe OS 权限 -> app_id + Session Token 身份 -> Security Center RBAC -> AuditStart -> Handler -> AuditEnd`
+
+审计事件字段沿用 Phase 1 `AuditEvent`：`event_id`、`timestamp`、`tenant_id`、`device_id`、`principal`、`action`、`resource`、`target`、`params_digest`、`result`、`trace_id`、`prev_hash`、`hash`。AppPlatform 的 `principal` 使用 `app:{app_id}`；未注册的 `RegisterApp` 使用本地 IPC peer 身份或 `app:pending:{app_name}`，注册成功后以返回的 `app_id` 作为后续 principal。所有认证失败、RBAC 拒绝、参数校验失败和 handler 失败都必须写入拒绝/失败审计。
+
+| RPC | FR 对应 | 身份来源 | RBAC Resource / Action | Audit target | params_digest | result | 当前状态 / 缺口 |
+| --- | ------- | -------- | ---------------------- | ------------ | ------------- | ------ | --------------- |
+| `RegisterApp` | FR-7.2 / FR-8.5 / FR-8.6 | UDS/Named Pipe peer + 注册请求，成功后签发 Session Token | `AppControl / Execute` | `app:{app_name}` | `app_name`、`app_version`、`capabilities`、`metadata` 摘要 | `success` / `denied` / `failed` | ✅ 已接入统一 wrapper；以 `app:pending:{app_name}` principal 写注册成功/拒绝/失败审计 |
+| `Heartbeat` | FR-7.2 / FR-8.5 / FR-8.6 | `app_id + session_token` | `AppControl / Execute` | `app:{app_id}:session` | `app_id` 摘要 | `success` / `unauthenticated` / `denied` / `failed` | ✅ Session Token 先校验，再 RBAC，再写续期审计 |
+| `ReportHealth` | FR-10.4 / FR-10.5 / FR-8.6 | `app_id + session_token` | `Telemetry / Write` | `app:{app_id}:health` | `status`、`message`、`metrics` 摘要 | `success` / `unauthenticated` / `denied` / `failed` | ✅ 健康上报审计已接入；策略 restart 以 `LocalSystem` 写审计 |
+| `PublishData` | FR-7.4 / FR-8.5 / FR-8.6 | `app_id + session_token` | `Telemetry / Write` | `app:{app_id}:topic:{topic}` | topic、payload SHA-256、metadata 摘要 | `success` / `unauthenticated` / `denied` / `failed` | ✅ DataRouter 上行、RBAC 映射、payload 摘要审计已接入 |
+| `WatchConfig` | FR-7.5 / FR-8.5 / FR-8.6 | `app_id + session_token` | `Configuration / Read` | `app:{app_id}:config` | keys 列表摘要 | `success` / `unauthenticated` / `denied` / `stream_closed` / `failed` | ✅ config watch 已接入；stream 开启成功与关闭审计已写入 |
+| `SubscribeData` | FR-7.4 / FR-7.10 / FR-8.5 / FR-8.6 | `app_id + session_token` | `Telemetry / Read` | `app:{app_id}:subscribe:{topics}` | topics 列表摘要 | `success` / `unauthenticated` / `denied` / `stream_closed` / `failed` | ✅ DownlinkRegistry 与订阅 RBAC/审计已接入；细粒度 topic ACL 与 backend bridge 仍待补 |
+| `GetConfig` | FR-7.5 / FR-8.5 / FR-8.6 | `app_id + session_token` | `Configuration / Read` | `app:{app_id}:config` | keys 列表摘要 | `success` / `unauthenticated` / `denied` / `failed` | ✅ 当前配置读取 RBAC 与查询审计已接入 |
+| `UnregisterApp` | FR-7.2 / FR-8.5 / FR-8.6 | `app_id + session_token` | `AppControl / Execute` | `app:{app_id}:session` | `app_id` 摘要 | `success` / `unauthenticated` / `denied` / `failed` | ✅ 注销/吊销 RBAC 与审计已接入 |
+
+FR-7.6 更新查询 / 触发更新 RPC 尚未暴露到 Phase 2 AppPlatform proto；暴露时必须映射为 `Upgrade / Execute`，并写入包含 `app_id`、目标版本、触发来源、结果的 Audit Chain 事件。
+
+默认 RBAC 策略已覆盖 `Telemetry / Write` 授权语义：已注册应用只允许写自身命名空间的数据和健康事件；`Readonly` 会话不得触发注销、健康状态写入、数据上行或控制动作。HealthEvaluator 触发的自动 restart 以 `LocalSystem` principal 写 `AppControl / Execute` 审计，并在 `target` 中记录触发源 app 与策略名称。预注册准入策略、外部策略加载、细粒度 topic ACL 与平台 IPC ACL 验证仍需收口。
 
 ### 5.2 工作项
 
@@ -597,8 +620,10 @@ trait SecurityCenter {
 - [x] 南向 gRPC Server（Linux/macOS UDS 路径已接入 agent 启动流程）
 - [x] 协议定义：`proto/app.proto` — AppPlatform 服务含 RegisterApp / Heartbeat / ReportHealth / PublishData / WatchConfig / SubscribeData / GetConfig / UnregisterApp
 - [~] UDS / Named Pipe 本地通道权限设计（UDS 可用；Windows Named Pipe 仍为 stub）
+  - 安全边界：UDS/Named Pipe OS 权限只负责本地通道准入；RPC 级授权仍必须由 Session Token + Security Center RBAC 决策完成。
 - [x] 连接管理、短期 Session Token（32-byte random，SHA-256 哈希存储）、过期与吊销
 - [x] 未注册应用访问拒绝（validate_session）
+- [x] AppPlatform server 接入统一 Security Center / Audit Chain wrapper，补齐所有 RPC 的入口、出口、拒绝审计；安全未配置时 fail-closed
 - [ ] 基于 PAL `IpcServer` 的统一实现与三平台权限测试
 - [x] **交付物**：`proto/app.proto`、`src/app_platform.rs`、`src/app.rs` 集成
 
@@ -610,7 +635,9 @@ trait SecurityCenter {
 - [x] 应用清单持久化（RegisterApp 写入 registry manifest；北向 StartApp 写入 lifecycle manifest）
 - [x] 应用 session 续期（Heartbeat），吊销（UnregisterApp / revoke_app_session）
 - [x] 健康报告持久化（`app_health_reports` 表）
-- [ ] 注册/续期/吊销操作接入 RBAC 与 Audit Chain
+- [x] 注册/续期/吊销操作接入 RBAC 与 Audit Chain
+  - 映射：`RegisterApp` / `Heartbeat` / `UnregisterApp` -> `AppControl / Execute`
+  - 审计：`target=app:{app_id}:session`，记录 token 校验结果、过期/吊销原因、注册 metadata 摘要
 - [x] **交付物**：`crates/agent-store` SCHEMA_V2/API，`src/app_platform.rs`，会话单元测试
 
 #### W2.3 App Lifecycle（8 天）【部分完成】
@@ -633,6 +660,9 @@ trait SecurityCenter {
 - [x] Topic 映射规则：`{tenant}/{device_id}/apps/{app_id}/{topic}`
 - [x] 应用命名空间隔离（`validate_app_topic` 拒绝 `../`、绝对路径）
 - [x] 死连接自动清理（dead sender 从 registry 移除）
+- [x] `PublishData` / `SubscribeData` 接入 RBAC 与 Audit Chain
+  - 映射：`PublishData` -> `Telemetry / Write`；`SubscribeData` -> `Telemetry / Read`
+  - 审计：`PublishData target=app:{app_id}:topic:{topic}`；`SubscribeData target=app:{app_id}:subscribe:{topics}`；记录 topic/topics、payload SHA-256、metadata 摘要和 stream open/close 结果
 - [ ] 流量整形、离线队列复用、指标与 trace 埋点
 - [x] **交付物**：`src/data_router.rs`、AppPlatform 数据路由测试
 
@@ -645,6 +675,9 @@ trait SecurityCenter {
 - [x] AppConfigWatcher：过滤本 app 及 Device/Agent 级变更
 - [x] 删除 tombstone 持久化，避免已删配置从 StateStore 复现
 - [ ] 配置回滚 API、默认值合并策略、生效策略、签名验证接入 Security Center
+- [x] `WatchConfig` / `GetConfig` 接入 RBAC 与 Audit Chain
+  - 映射：`WatchConfig` / `GetConfig` -> `Configuration / Read`
+  - 审计：`target=app:{app_id}:config`，记录 keys 列表摘要、版本号、stream open/close 结果
 - [x] **交付物**：`src/config_manager.rs`，store-backed 单元测试
 
 #### W2.6 App Health 与运行时控制预留（5 天）【部分完成】
@@ -654,7 +687,10 @@ trait SecurityCenter {
 - [x] 连续失败阈值策略，触发 Restart / Alert / RestartThenAlert
 - [x] 重启限速（min_restart_interval 防抖）
 - [x] HealthAction 通过 mpsc::Sender 异步发出；Restart / RestartThenAlert 已驱动 lifecycle restart
-- [ ] FR-10 控制预留的 Local Msg Broker、RBAC 与审计接入点
+- [~] FR-10 控制预留的 Local Msg Broker、RBAC 与审计接入点
+  - `ReportHealth` 映射：`Telemetry / Write`，审计 `target=app:{app_id}:health`，记录 status、message、metrics 摘要
+  - HealthEvaluator 自动 restart 映射：`LocalSystem` principal + `AppControl / Execute`，审计触发策略、目标 app、执行结果
+  - 后续 FR-10 控制 RPC / Local Msg Broker 指令映射：`AppControl / Execute`，必须记录操作者身份、目标应用、指令类型、时间、结果，满足 FR-10.10
 - [x] **交付物**：`src/health_evaluator.rs`，3 项单元测试
 
 #### W2.7 Upgrade Engine 设计与应用级原型（10 天）【部分完成】
@@ -679,9 +715,11 @@ trait SecurityCenter {
 
 #### W2.9 端到端集成与测试（4 天）【部分完成】
 
-- [x] 单元测试通过：`cargo test` = 120 passed / 0 failed / 4 ignored
+- [x] 单元测试通过：`cargo test` = 131 passed / 0 failed / 4 ignored
 - [x] AppPlatform 单测覆盖注册、伪造 token、注销、数据上行、数据下行、配置读取
 - [x] Config/Upgrade 单测覆盖 store-backed 配置删除与升级状态持久化
+- [~] AppPlatform RBAC 矩阵测试：已覆盖 security missing fail-closed、伪造 token、readonly 写拒绝；完整 `admin/operator/readonly` × 全 RPC 矩阵仍待补
+- [~] AppPlatform Audit Chain 测试：已覆盖成功、认证失败、RBAC 拒绝、stream close 与 HealthEvaluator restart 审计；完整 handler 失败与落盘哈希链校验矩阵仍待补
 - [ ] 性能基线（待真实部署环境测量）
 - [ ] 完整 E2E 集成测试（运行中的 agent + payload app + MQTT/backend mock）
 - [x] **交付物**：代码 + 单元测试套件 + 示例应用
@@ -696,14 +734,19 @@ trait SecurityCenter {
 | W5 末 | Config Manager / Config Watcher 完成                      | 🔄 部分完成 |
 | W6 末 | App Health 最小闭环完成，OTA 设计评审通过                 | 🔄 部分完成 |
 | W7 末 | OTA 应用级原型 + Rust SDK 示例完成                        | 🔄 基本完成 |
-| W8 末 | **v1.0 发布**：应用基座 GA + OTA 设计就绪 + Device 命名统一 | ⏳ 未达 GA（待 E2E + 性能基线 + PAL/RBAC 收口） |
+| W8 末 | **v1.0 发布**：应用基座 GA + OTA 设计就绪 + Device 命名统一 | ⏳ 未达 GA（待 E2E + 性能基线 + PAL 生命周期/动态策略收口） |
 
 ### 5.4 验收标准
 
 - ✅ 全仓业务术语统一为 `device`，除历史 ADR/迁移说明外无旧术语残留
 - ✅ 旧 `service.station_id` / `service.device_id` 配置向后兼容
 - ✅ 旧数据库 `station_*` 数据可无损迁移
-- ⏳ AppPlatform RPC 的 RBAC 与 Audit Chain 映射尚未完整接入
+- ✅ AppPlatform RPC 的 RBAC 与 Audit Chain 映射已接入：
+  - 每个 AppPlatform RPC 均有明确 `Resource / Action` 映射，未映射方法 fail-closed
+  - 每个 RPC 均写入 AuditStart / AuditEnd，拒绝和失败路径必须写审计
+  - 审计字段包含 `principal(app_id)`、`target(app/topic/config/health/session)`、`params_digest`、`result`、`trace_id`
+  - `Readonly` 会话不得注销应用、写健康、写数据或触发控制动作；预注册准入策略待动态策略加载补齐
+  - HealthEvaluator 自动 restart 以 `LocalSystem` principal 写 `AppControl / Execute` 审计
 - 🔄 应用注册/启停/健康重启闭环达到原型级，升级/包安装闭环未达生产验收
 - 🔄 数据通道双向贯通达到进程内/MQTT 上行原型级，下行 backend bridge 待补
 - 🔄 配置三层模型可用，回滚/签名/默认合并待补
@@ -716,9 +759,9 @@ trait SecurityCenter {
 
 | 类型     | 覆盖范围                                                                          | 状态 |
 | -------- | --------------------------------------------------------------------------------- | ---- |
-| 单元测试 | Session 生命周期、App Registry、Lifecycle 状态机、PAL 启停/资源限制、topic 映射、config watch、health evaluator、upgrade state machine | ✅ 124 通过 |
+| 单元测试 | Session 生命周期、App Registry、Lifecycle 状态机、PAL 启停/资源限制、topic 映射、config watch、health evaluator、upgrade state machine | ✅ 131 通过 |
 | 集成测试 | 注册→心跳→健康上报→数据上报→注销链路（示例应用）                                 | 🔄 编译通过，完整运行态 E2E 待补 |
-| 安全测试 | 伪造 token 拒绝、会话过期检测、签名/hash 错误升级包基础覆盖                       | 🔄 单元覆盖 |
+| 安全测试 | 伪造 token 拒绝、会话过期检测、Readonly RBAC 拒绝、AppPlatform Audit 成功/拒绝/stream close、HealthEvaluator restart 审计、签名/hash 错误升级包基础覆盖；完整矩阵与 running-agent E2E 待补 | 🔄 单元覆盖 |
 | E2E 测试 | 完整 Agent 进程 + payload app 集成                                                | ⏳ 待补 |
 | 性能基线 | IPC 吞吐、内存占用                                                                | ⏳ 待补 |
 
@@ -728,7 +771,7 @@ trait SecurityCenter {
 - Phase 2 当前交付二进制应用原型；完整包解压、OCI、WASM、灰度发布、多租户推迟。
 - Rust SDK 基本交付；Python SDK 推迟到 Phase 3。
 - 系统级 OTA（A/B 槽位）、Agent 自升级、真机断电测试属于 Phase 3。
-- 南向 IPC 不做 TLS，安全边界依赖 UDS 文件权限、Session Token（哈希存储）、RBAC/Audit 后续接入。
+- 南向 IPC 不做 TLS，安全边界依赖 UDS 文件权限、Session Token（哈希存储）、Security Center RBAC 与 Audit Chain；Phase 2 GA 前仍需补齐平台 IPC ACL 测试、动态策略加载和 running-agent E2E 验证。
 
 ---
 

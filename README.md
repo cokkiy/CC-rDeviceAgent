@@ -91,6 +91,7 @@ The southbound application platform exposes **`AppPlatform`** over local IPC:
 
 - register and unregister payload applications
 - issue short-lived session tokens and validate app sessions
+- authorize RPCs through Security Center RBAC and write Audit Chain entries
 - accept heartbeats and health reports
 - publish app data upstream and subscribe to downlink data
 - read and watch device / agent / app scoped configuration
@@ -111,8 +112,11 @@ The 1.0-beta line includes the following Phase 0-2 work:
 - Security Center primitives: mTLS configuration, X.509 identity extraction,
   RBAC model, replay guard, command whitelist, Ed25519 verification, HKDF helpers,
   and audit hash chain persistence
-- App Registry and AppPlatform session lifecycle with registration, heartbeat,
-  health report, data publish, config read/watch, and unregister flows
+- App Registry and secured AppPlatform RPC lifecycle with session-token identity,
+  RBAC resource/action mappings, success/denied/unauthenticated/failed audit
+  outcomes, stream-close audit events, and readonly session enforcement
+- HealthEvaluator restart actions audited as `LocalSystem` `AppControl / Execute`
+  decisions before dispatching lifecycle restart
 - App Lifecycle prototype with state machine, executable path validation, async
   lifecycle command channel, status query, and list support
 - Data Router prototype for app uplink topics and in-process downlink registry
@@ -153,9 +157,9 @@ that includes all of the sections above and uses the service state interval.
 
 | Gap                                                             | Severity | Target closeout |
 | --------------------------------------------------------------- | -------- | --------------- |
-| AppPlatform RBAC / Audit Chain mapping is not complete          | 🔴 High   | Phase 2         |
 | Complete running-agent E2E test with payload app and MQTT mock   | 🔴 High   | Phase 2         |
 | Performance baseline is not measured                            | 🔴 High   | Phase 2         |
+| AppPlatform dynamic policy loading and platform IPC ACL coverage remain partial | 🟡 Medium | Phase 2         |
 | Package unpacking, manifest parsing, and install config missing  | 🟡 Medium | Phase 2         |
 | Production resource isolation / quota policy incomplete          | 🟡 Medium | Phase 2         |
 | OTA package extraction, health checks, and anti-rollback missing | 🟡 Medium | Phase 2-3       |
@@ -172,7 +176,7 @@ Phase -1 (v0.4)       Architecture gap analysis & fixes   Complete
 Phase 0  (v0.5)       Foundation + PAL contracts          Complete / partial platform adapters
 Phase 1  (v0.8)       Security hardening                  Substantially implemented / beta gaps remain
 Phase 2  (1.0-beta)   Application platform + OTA design   Current beta track
-Phase 2  (v1.0 GA)    App platform GA closeout            E2E, performance, PAL/RBAC/Audit closeout
+Phase 2  (v1.0 GA)    App platform GA closeout            E2E, performance, PAL lifecycle, policy loading
 Phase 3  (v1.5)  Full OTA upgrade                    10 weeks
 Phase 4  (v2.0)  Platformization                     10 weeks
 Phase 5  (v2.1)  Production readiness                 6 weeks
@@ -186,7 +190,7 @@ Phase 5  (v2.1)  Production readiness                 6 weeks
 | 0     | v0.5       | Foundation + PAL          | Complete core: PAL traits, State Store, CapabilityProfile      |
 | 1     | v0.8       | Security                  | Beta: mTLS, RBAC, Audit Chain, command policy; sandbox gaps    |
 | 2     | 1.0-beta   | Application platform      | Current: IPC, App Registry, Config Manager, OTA app prototype  |
-| 2     | v1.0 GA    | Application platform GA   | Pending: E2E, performance, PAL lifecycle, RBAC/Audit closeout  |
+| 2     | v1.0 GA    | Application platform GA   | Pending: E2E, performance, PAL lifecycle, policy loading       |
 | 3     | v1.5       | OTA upgrade               | Planned: A/B slot, Agent self-update, fault injection tests    |
 | 4     | v2.0       | Platformization           | Planned: multi-tenant, canary release, extension points        |
 | 5     | v2.1       | Production readiness      | Planned: SLA validation, security audit, documentation         |

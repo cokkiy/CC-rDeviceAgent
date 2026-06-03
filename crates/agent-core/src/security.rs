@@ -201,6 +201,7 @@ impl Default for RbacPolicy {
                 (Resource::FileTransfer, Action::Write),
                 (Resource::Configuration, Action::Read),
                 (Resource::Configuration, Action::Write),
+                (Resource::Telemetry, Action::Write),
                 (Resource::Upgrade, Action::Execute),
                 (Resource::AppControl, Action::Execute),
                 (Resource::SecurityPolicy, Action::Manage),
@@ -214,6 +215,7 @@ impl Default for RbacPolicy {
                 (Resource::FileTransfer, Action::Read),
                 (Resource::FileTransfer, Action::Write),
                 (Resource::Configuration, Action::Read),
+                (Resource::Telemetry, Action::Write),
                 (Resource::Upgrade, Action::Execute),
                 (Resource::AppControl, Action::Execute),
             ]),
@@ -681,6 +683,10 @@ mod tests {
 
         assert_eq!(
             policy.authorize(&principal, Resource::ControlCommand, Action::Execute),
+            Decision::Allow
+        );
+        assert_eq!(
+            policy.authorize(&principal, Resource::Telemetry, Action::Write),
             Decision::Allow
         );
         assert_eq!(

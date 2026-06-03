@@ -5,10 +5,18 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
+use agent_core::chain::AuditWriter;
+use agent_core::security::{Action, AuditEvent, Principal, Resource, Role};
 use tokio::sync::mpsc;
 use tracing::warn;
+
+fn digest_params(value: serde_json::Value) -> String {
+    use ring::digest::{SHA256, digest};
+    let bytes = serde_json::to_vec(&value).unwrap_or_default();
+    base16::encode_lower(digest(&SHA256, &bytes).as_ref())
+}
 
 // ── health status ──────────────────────────────────────────────────────────
 
@@ -84,6 +92,13 @@ pub struct HealthAction {
 pub struct HealthEvaluator {
     apps: Mutex<HashMap<String, AppHealth>>,
     action_tx: mpsc::Sender<HealthAction>,
+    audit: Option<HealthAudit>,
+}
+
+#[derive(Clone)]
+struct HealthAudit {
+    device_id: String,
+    writer: AuditWriter,
 }
 
 impl HealthEvaluator {
@@ -91,6 +106,39 @@ impl HealthEvaluator {
         Arc::new(Self {
             apps: Mutex::new(HashMap::new()),
             action_tx,
+            audit: None,
+        })
+    }
+
+    pub fn with_audit(
+        self: Arc<Self>,
+        device_id: impl Into<String>,
+        writer: AuditWriter,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            apps: Mutex::new(
+                self.apps
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(app_id, health)| {
+                        (
+                            app_id.clone(),
+                            AppHealth {
+                                consecutive_failures: health.consecutive_failures,
+                                last_status: health.last_status.clone(),
+                                last_restart: health.last_restart,
+                                policy: health.policy.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            action_tx: self.action_tx.clone(),
+            audit: Some(HealthAudit {
+                device_id: device_id.into(),
+                writer,
+            }),
         })
     }
 
@@ -163,8 +211,40 @@ impl HealthEvaluator {
                 action = ?action.action,
                 "Health policy triggered"
             );
+            self.audit_policy_action(&action);
             let _ = self.action_tx.send(action).await;
         }
+    }
+
+    fn audit_policy_action(&self, action: &HealthAction) {
+        if !matches!(
+            action.action,
+            PolicyAction::Restart | PolicyAction::RestartThenAlert
+        ) {
+            return;
+        }
+
+        let Some(audit) = self.audit.as_ref() else {
+            return;
+        };
+        let principal = Principal::new("default", &audit.device_id, "LocalSystem", Role::Admin);
+        let policy_name = format!("{:?}", action.action);
+        let mut event = AuditEvent::new(
+            format!("health-action-{}", uuid::Uuid::new_v4()),
+            SystemTime::now(),
+            principal,
+            Action::Execute,
+            Resource::AppControl,
+            format!("app:{}:health-policy:{policy_name}", action.app_id),
+            "restart_triggered",
+            uuid::Uuid::new_v4().to_string(),
+        );
+        event.params_digest = digest_params(serde_json::json!({
+            "app_id": action.app_id,
+            "policy": policy_name,
+            "consecutive_failures": action.consecutive_failures,
+        }));
+        let _ = audit.writer.write_entry(event);
     }
 
     pub fn consecutive_failures(&self, app_id: &str) -> u32 {
@@ -191,6 +271,25 @@ impl HealthEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    use agent_core::chain::{AuditSink, AuditWriter};
+    use agent_core::security::{Action, AuditEvent, Resource};
+    use agent_store::{AuditEventFilter, StateStore};
+
+    struct StoreAuditSink {
+        store: Arc<Mutex<StateStore>>,
+    }
+
+    impl AuditSink for StoreAuditSink {
+        fn append_audit_event(&self, event: AuditEvent) -> Result<(), String> {
+            self.store
+                .lock()
+                .unwrap()
+                .append_audit_event(event)
+                .map_err(|error| error.to_string())
+        }
+    }
 
     #[tokio::test]
     async fn triggers_after_threshold() {
@@ -247,5 +346,44 @@ mod tests {
 
         eval.report("app3", HealthStatus::Unhealthy).await;
         assert!(rx.try_recv().is_err(), "second suppressed by rate-limit");
+    }
+
+    #[tokio::test]
+    async fn restart_policy_trigger_writes_local_system_audit() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let store = Arc::new(Mutex::new(StateStore::open_in_memory().unwrap()));
+        let audit_writer = AuditWriter::new(Arc::new(StoreAuditSink {
+            store: Arc::clone(&store),
+        }));
+        let eval = HealthEvaluator::new(tx).with_audit("test-device", audit_writer);
+
+        eval.set_policy(
+            "app4",
+            HealthPolicy {
+                unhealthy_threshold: 1,
+                action: PolicyAction::Restart,
+                min_restart_interval: Duration::from_millis(0),
+            },
+        );
+
+        eval.report("app4", HealthStatus::Unhealthy).await;
+        let action = rx.try_recv().expect("restart action emitted");
+        assert_eq!(action.app_id, "app4");
+        tokio::task::yield_now().await;
+
+        let events = store
+            .lock()
+            .unwrap()
+            .query_audit_events(&AuditEventFilter {
+                principal: Some("LocalSystem".into()),
+                resource: Some(Resource::AppControl),
+                action: Some(Action::Execute),
+                result: Some("restart_triggered".into()),
+                ..AuditEventFilter::default()
+            })
+            .unwrap();
+        assert!(events.iter().any(|event| {
+            event.target == "app:app4:health-policy:Restart" && !event.params_digest.is_empty()
+        }));
     }
 }

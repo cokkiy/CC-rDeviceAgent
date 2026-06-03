@@ -210,7 +210,7 @@ pub async fn run(
     );
     let audit_sink: Arc<dyn agent_core::chain::AuditSink> =
         Arc::new(StoreAuditSink { store: state_store });
-    let audit_writer = AuditWriter::new(audit_sink);
+    let audit_writer = AuditWriter::new(Arc::clone(&audit_sink));
     let security_center = Arc::new(Mutex::new(BasicSecurityCenter::new(
         RbacPolicy::default(),
         ReplayGuard::new(Duration::from_secs(300)),
@@ -235,6 +235,20 @@ pub async fn run(
     {
         let app_platform_store = agent_store::StateStore::open(&store_path)
             .map_err(|e| anyhow::anyhow!("open state store for app platform: {e}"))?;
+        let app_platform_audit_store = Mutex::new(
+            agent_store::StateStore::open(&store_path)
+                .map_err(|e| anyhow::anyhow!("open state store for app platform audit: {e}"))?,
+        );
+        let app_platform_audit_sink: Arc<dyn agent_core::chain::AuditSink> =
+            Arc::new(StoreAuditSink {
+                store: app_platform_audit_store,
+            });
+        let app_platform_audit_writer = AuditWriter::new(app_platform_audit_sink);
+        let app_platform_health_audit_writer = app_platform_audit_writer.clone();
+        let app_platform_security_center = Arc::new(Mutex::new(BasicSecurityCenter::new(
+            RbacPolicy::default(),
+            ReplayGuard::new(Duration::from_secs(300)),
+        )));
         let config_store = agent_store::StateStore::open(&store_path)
             .map_err(|e| anyhow::anyhow!("open state store for config manager: {e}"))?;
         let config_manager = ConfigManager::new_with_store(config_store);
@@ -243,7 +257,10 @@ pub async fn run(
             state.device_id().to_string(),
         ));
         let (health_action_tx, mut health_action_rx) = tokio::sync::mpsc::channel(64);
-        let health_evaluator = HealthEvaluator::new(health_action_tx);
+        let health_evaluator = HealthEvaluator::new(health_action_tx).with_audit(
+            state.device_id().to_string(),
+            app_platform_health_audit_writer,
+        );
         let lifecycle_for_health = lifecycle.clone();
         tokio::spawn(async move {
             while let Some(action) = health_action_rx.recv().await {
@@ -274,7 +291,8 @@ pub async fn run(
                 ))
                 .with_config_manager(config_manager)
                 .with_health_evaluator(health_evaluator)
-                .with_lifecycle(lifecycle.clone());
+                .with_lifecycle(lifecycle.clone())
+                .with_security(app_platform_security_center, app_platform_audit_writer);
         if let Some(mqtt_client) = state.mqtt_client().cloned() {
             app_platform_state =
                 app_platform_state.with_data_router(data_router, Arc::new(mqtt_client));
