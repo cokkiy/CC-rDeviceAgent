@@ -230,7 +230,10 @@ impl AppLifecycleHandle {
 
     pub async fn find_app_by_pid(&self, pid: u32) -> Option<String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let _ = self.tx.send(LifecycleCmd::FindByPid { pid, reply: tx }).await;
+        let _ = self
+            .tx
+            .send(LifecycleCmd::FindByPid { pid, reply: tx })
+            .await;
         rx.await.ok().flatten()
     }
 

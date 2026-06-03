@@ -1109,7 +1109,11 @@ fn lifecycle_app_id(app: &AppStartParameter) -> String {
     if base.is_empty() {
         format!("runtime_app_{}", app.param_id)
     } else {
-        format!("runtime_{}_{}", sanitize_app_id_component(&base), app.param_id)
+        format!(
+            "runtime_{}_{}",
+            sanitize_app_id_component(&base),
+            app.param_id
+        )
     }
 }
 
