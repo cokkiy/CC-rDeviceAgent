@@ -577,7 +577,7 @@ trait SecurityCenter {
 
 让设备成为载荷应用的运行平台 + **启动 Upgrade Engine 设计与原型**（提前介入，降低 Phase 3 风险）。
 
-> **实现状态更新（2026-05-29）**：Phase 2 已完成主要原型与关键链路接线；`cargo test` 通过（120 passed / 0 failed / 4 ignored）。当前状态不是 GA 完成：PAL 化生命周期、RBAC/Audit 全量接入、完整 E2E、性能基线、包安装解压与资源隔离仍需收口。
+> **实现状态更新（2026-06-02）**：Phase 2 已完成主要原型与关键链路接线；`cargo test` 通过（124 passed / 0 failed / 4 ignored）。当前状态不是 GA 完成：App Lifecycle 已接入 PAL ProcessManager / ResourceLimiter，并与 AppPlatform 注册、北向 Start/Restart、HealthEvaluator restart action 完成运行时接线；RBAC/Audit 全量接入、完整 E2E、性能基线、包安装解压与生产级资源隔离仍需收口。
 
 ### 5.2 工作项
 
@@ -607,7 +607,7 @@ trait SecurityCenter {
 - [x] 应用注册流程（RegisterApp RPC + 状态持久化）
 - [x] 应用身份分配（App ID = `{name}_{timestamp_ms}` + Session Token + device_id 绑定）
 - [x] 应用能力声明（capabilities_json 持久化）
-- [~] 应用清单持久化（StateStore 已有 app manifest API；RegisterApp 尚未写入完整 manifest）
+- [x] 应用清单持久化（RegisterApp 写入 registry manifest；北向 StartApp 写入 lifecycle manifest）
 - [x] 应用 session 续期（Heartbeat），吊销（UnregisterApp / revoke_app_session）
 - [x] 健康报告持久化（`app_health_reports` 表）
 - [ ] 注册/续期/吊销操作接入 RBAC 与 Audit Chain
@@ -617,12 +617,12 @@ trait SecurityCenter {
 
 - [x] 应用生命周期状态机（Registered → Installed → Running → Stopped → Failed → Uninstalled）
 - [x] 应用安装（可执行文件路径校验）
-- [~] 应用启动与停止（当前直接使用 tokio::process::Command；尚未切到 PAL ProcessManager）
+- [x] 应用启动与停止（已切到 PAL ProcessManager；北向 Start/Restart 经 AppLifecycleHandle）
 - [x] 应用状态查询与列表
 - [x] 异步 LifecycleCmd 通道，AppLifecycleHandle 供 RPC 层调用
 - [ ] 应用包解压、manifest 校验、安装配置
-- [ ] 应用监控与自动重启（指数退避）
-- [ ] 资源隔离与配额（PAL ResourceLimiter）
+- [~] 应用监控与自动重启（HealthEvaluator restart action 已驱动 lifecycle restart；指数退避待补）
+- [~] 资源隔离与配额（Manifest limit 已接 PAL ResourceLimiter；生产级 cgroup/job 配额策略待补）
 - [ ] stdout/stderr → Observability Hub
 - [x] **交付物**：`src/app_lifecycle.rs`，3 项单元测试
 
@@ -653,7 +653,7 @@ trait SecurityCenter {
 - [x] HealthEvaluator 接入 ReportHealth，连续失败计数，healthy 时重置
 - [x] 连续失败阈值策略，触发 Restart / Alert / RestartThenAlert
 - [x] 重启限速（min_restart_interval 防抖）
-- [~] HealthAction 通过 mpsc::Sender 异步发出；当前 agent 启动流程仅记录 action，尚未驱动 lifecycle restart/rollback
+- [x] HealthAction 通过 mpsc::Sender 异步发出；Restart / RestartThenAlert 已驱动 lifecycle restart
 - [ ] FR-10 控制预留的 Local Msg Broker、RBAC 与审计接入点
 - [x] **交付物**：`src/health_evaluator.rs`，3 项单元测试
 
@@ -704,10 +704,10 @@ trait SecurityCenter {
 - ✅ 旧 `service.station_id` / `service.device_id` 配置向后兼容
 - ✅ 旧数据库 `station_*` 数据可无损迁移
 - ⏳ AppPlatform RPC 的 RBAC 与 Audit Chain 映射尚未完整接入
-- 🔄 应用注册/启停/升级闭环达到原型级，未达生产验收
+- 🔄 应用注册/启停/健康重启闭环达到原型级，升级/包安装闭环未达生产验收
 - 🔄 数据通道双向贯通达到进程内/MQTT 上行原型级，下行 backend bridge 待补
 - 🔄 配置三层模型可用，回滚/签名/默认合并待补
-- 🔄 应用健康上报可用，失败动作尚未驱动 lifecycle restart/rollback
+- 🔄 应用健康上报可用，失败动作已驱动 lifecycle restart；rollback 待升级闭环补齐
 - 🔄 OTA 状态机与应用级升级原型可演示，包解压与版本防回滚待补
 - 🔄 Rust SDK 基本完成，更新查询 / 触发更新待补
 - ⏳ E2E 测试通过率 ≥ 95%（待集成环境）
@@ -716,7 +716,7 @@ trait SecurityCenter {
 
 | 类型     | 覆盖范围                                                                          | 状态 |
 | -------- | --------------------------------------------------------------------------------- | ---- |
-| 单元测试 | Session 生命周期、App Registry、Lifecycle 状态机、topic 映射、config watch、health evaluator、upgrade state machine | ✅ 120 通过 |
+| 单元测试 | Session 生命周期、App Registry、Lifecycle 状态机、PAL 启停/资源限制、topic 映射、config watch、health evaluator、upgrade state machine | ✅ 124 通过 |
 | 集成测试 | 注册→心跳→健康上报→数据上报→注销链路（示例应用）                                 | 🔄 编译通过，完整运行态 E2E 待补 |
 | 安全测试 | 伪造 token 拒绝、会话过期检测、签名/hash 错误升级包基础覆盖                       | 🔄 单元覆盖 |
 | E2E 测试 | 完整 Agent 进程 + payload app 集成                                                | ⏳ 待补 |

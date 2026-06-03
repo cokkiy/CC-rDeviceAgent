@@ -18,6 +18,7 @@ impl PlatformBuilder for MockPlatformBuilder {
         let mut context = pal_fallback::fallback_context(profile, PathBuf::from(".mock-keys"));
         let process = Arc::new(MockProcessManager::default());
         context.process_manager = process;
+        context.resource_limiter = Arc::new(MockResourceLimiter);
         Ok(context)
     }
 }
@@ -87,5 +88,14 @@ impl ProcessManager for MockProcessManager {
             running,
             exit_code: None,
         })
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct MockResourceLimiter;
+
+impl ResourceLimiter for MockResourceLimiter {
+    fn apply_to_pid(&self, _pid: u32, _limits: &ResourceLimitSpec) -> PalResult<()> {
+        Ok(())
     }
 }

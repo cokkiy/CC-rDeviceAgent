@@ -332,6 +332,7 @@ dependencies = [
  "pal-core",
  "pal-fallback",
  "pal-linux",
+ "pal-mock",
  "pal-windows",
  "pnet_datalink",
  "prost",

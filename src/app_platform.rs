@@ -13,8 +13,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info};
 
-use agent_store::{AppHealthReportRecord, AppSessionRecord, StateStore};
+use agent_store::{AppHealthReportRecord, AppManifestRecord, AppSessionRecord, StateStore};
 
+use crate::app_lifecycle::AppLifecycleHandle;
 use crate::config_manager::{ConfigManager, ConfigScope};
 use crate::data_router::{AsyncPublish, DataRouter};
 use crate::grpc::app::{
@@ -65,6 +66,7 @@ pub struct AppPlatformState {
     config_manager: Option<Arc<ConfigManager>>,
     health_evaluator: Option<Arc<HealthEvaluator>>,
     app_data_publisher: Option<Arc<dyn DynAppDataPublisher>>,
+    lifecycle: Option<AppLifecycleHandle>,
 }
 
 impl AppPlatformState {
@@ -77,6 +79,7 @@ impl AppPlatformState {
             config_manager: None,
             health_evaluator: None,
             app_data_publisher: None,
+            lifecycle: None,
         }
     }
 
@@ -102,6 +105,11 @@ impl AppPlatformState {
 
     pub fn with_health_evaluator(mut self, health_evaluator: Arc<HealthEvaluator>) -> Self {
         self.health_evaluator = Some(health_evaluator);
+        self
+    }
+
+    pub fn with_lifecycle(mut self, lifecycle: AppLifecycleHandle) -> Self {
+        self.lifecycle = Some(lifecycle);
         self
     }
 
@@ -199,6 +207,36 @@ impl AppPlatform for AppPlatformService {
             .unwrap()
             .upsert_app_session(&record)
             .map_err(|e| Status::internal(e.to_string()))?;
+
+        let manifest_json = serde_json::json!({
+            "kind": "registry",
+            "app_id": app_id,
+            "app_name": req.app_name,
+            "version": req.app_version,
+            "capabilities": req.capabilities,
+            "metadata": req.metadata,
+            "device_id": self.state.device_id,
+            "registered_at_unix_ms": now,
+        })
+        .to_string();
+
+        self.state
+            .store
+            .lock()
+            .unwrap()
+            .upsert_app_manifest(&AppManifestRecord {
+                app_id: app_id.clone(),
+                version: req.app_version.clone(),
+                manifest_json,
+            })
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        if let Some(lifecycle) = self.state.lifecycle.as_ref() {
+            lifecycle
+                .register(&app_id, &req.app_name, &req.app_version)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+        }
 
         info!(
             app_id = %app_id,
@@ -442,6 +480,16 @@ impl AppPlatform for AppPlatformService {
             .revoke_app_session(&req.app_id)
             .map_err(|e| Status::internal(e.to_string()))?;
 
+        if let Some(lifecycle) = self.state.lifecycle.as_ref()
+            && let Err(error) = lifecycle.stop(&req.app_id).await
+        {
+            tracing::warn!(
+                app_id = %req.app_id,
+                error = %error,
+                "failed to stop lifecycle app during unregister"
+            );
+        }
+
         info!(app_id = %req.app_id, "Application unregistered");
 
         Ok(Response::new(UnregisterAppResponse { success: true }))
@@ -456,12 +504,18 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     use agent_store::StateStore;
+    use pal_core::PlatformBuilder;
     use tokio_stream::StreamExt;
 
     fn make_service() -> AppPlatformService {
         let store = StateStore::open_in_memory().unwrap();
         let state = Arc::new(AppPlatformState::new("test-device".into(), store));
         AppPlatformService::new(state)
+    }
+
+    fn mock_lifecycle() -> crate::app_lifecycle::AppLifecycleHandle {
+        let context = pal_mock::MockPlatformBuilder::default().build().unwrap();
+        crate::app_lifecycle::spawn_lifecycle_manager(&context)
     }
 
     #[derive(Default)]
@@ -519,6 +573,41 @@ mod tests {
 
         assert!(hb.session_valid);
         assert!(hb.session_expires_at > 0);
+    }
+
+    #[tokio::test]
+    async fn register_app_updates_lifecycle_and_manifest_store() {
+        let store = StateStore::open_in_memory().unwrap();
+        let lifecycle = mock_lifecycle();
+        let state = Arc::new(
+            AppPlatformState::new("test-device".into(), store).with_lifecycle(lifecycle.clone()),
+        );
+        let svc = AppPlatformService::new(Arc::clone(&state));
+
+        let resp = svc
+            .register_app(Request::new(RegisterAppRequest {
+                app_name: "managed-app".into(),
+                app_version: "1.2.3".into(),
+                capabilities: vec!["metrics".into()],
+                metadata: HashMap::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(
+            lifecycle.get_state(&resp.app_id).await,
+            Some(crate::app_lifecycle::AppState::Registered)
+        );
+        let manifest = state
+            .store
+            .lock()
+            .unwrap()
+            .load_app_manifest(&resp.app_id)
+            .unwrap()
+            .expect("manifest persisted");
+        assert_eq!(manifest.version, "1.2.3");
+        assert!(manifest.manifest_json.contains("\"kind\":\"registry\""));
     }
 
     #[tokio::test]

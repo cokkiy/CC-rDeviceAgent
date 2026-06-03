@@ -27,6 +27,13 @@ pub fn shutdown() -> Result<()> {
         .context("shutdown through PAL")
 }
 
+pub fn terminate_process(pid: u32) -> Result<()> {
+    context()?
+        .process_manager
+        .terminate(pid)
+        .context("terminate process through PAL")
+}
+
 #[cfg(any(
     target_os = "linux",
     target_os = "android",

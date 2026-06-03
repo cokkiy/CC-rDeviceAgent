@@ -302,7 +302,10 @@ impl AppState {
 
                 // Terminate existing processes
                 for pid in &pids {
-                    if let Err(e) = crate::state::terminate_process(*pid) {
+                    if *pid <= 0 {
+                        continue;
+                    }
+                    if let Err(e) = crate::platform::terminate_process(*pid as u32) {
                         warn!("Failed to terminate process {}: {:?}", pid, e);
                     }
                 }
