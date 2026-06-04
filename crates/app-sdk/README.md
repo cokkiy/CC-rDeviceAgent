@@ -9,7 +9,7 @@ configuration watching, downlink subscription, and graceful unregister.
 
 ```toml
 [dependencies]
-cc-rdeviceagent-app-sdk = "1.0.0-beta.1"
+cc-rdeviceagent-app-sdk = "1.0.0-beta.2"
 ```
 
 The Rust crate name is `app_sdk`:
