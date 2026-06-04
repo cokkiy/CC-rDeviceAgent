@@ -1,10 +1,10 @@
 # Phase 2: Application Platform Implementation Status
 
-**Version**: 1.0  
-**Last Updated**: 2025-05-28  
-**Phase Duration**: 8 weeks  
-**Target Release**: v1.0  
-**Current Status**: ⚠️ NOT STARTED
+**Version**: 1.1
+**Last Updated**: 2026-06-04
+**Phase Duration**: 8 weeks
+**Target Release**: v1.0
+**Current Status**: 🔄 Prototype implemented; GA closeout remains
 
 ---
 
@@ -18,7 +18,11 @@ Phase 2 focuses on transforming CC-rDeviceAgent into an application platform by 
 5. **OTA Upgrade Engine design** and application-level prototype
 6. **Device → Device terminology migration** (unified naming)
 
-**Overall Progress**: 0/9 work packages completed (0%)
+**Overall Progress**: Phase 2 prototype is substantially implemented. The
+running-agent E2E path is now marked complete in
+[`action_plan-v2.0-zh.md`](./action_plan-v2.0-zh.md); v1.0 GA remains blocked by
+performance baseline work plus PAL lifecycle, dynamic policy loading, platform
+IPC ACL, package install, and broader security/audit matrix closeout.
 
 ---
 
@@ -26,14 +30,24 @@ Phase 2 focuses on transforming CC-rDeviceAgent into an application platform by 
 
 | Objective | Description | Status |
 |-----------|-------------|--------|
-| **Application Platform** | Enable payload apps to run on devices using Agent as runtime | 🔄 Partial |
-| **IPC Foundation** | Southbound gRPC over UDS/Named Pipe with RBAC & audit | 🔄 Partial |
-| **Lifecycle Management** | App registration, installation, PAL start/stop, health-triggered restart | 🔄 Partial |
-| **Data Routing** | Bidirectional data flow: app ↔ agent ↔ backend | 🔄 Partial |
-| **Config Management** | Three-tier config (device/agent/app) with versioning & rollback | 🔄 Partial |
-| **OTA Design** | Complete Upgrade Engine design + app-level prototype | 🔄 Partial |
+| **Application Platform** | Enable payload apps to run on devices using Agent as runtime | 🔄 Prototype implemented |
+| **IPC Foundation** | Southbound gRPC over UDS/Named Pipe with RBAC & audit | 🔄 Implemented on UDS; platform ACL hardening remains |
+| **Lifecycle Management** | App registration, installation, PAL start/stop, health-triggered restart | 🔄 Prototype implemented; install/package closeout remains |
+| **Data Routing** | Bidirectional data flow: app ↔ agent ↔ backend | 🔄 Prototype implemented |
+| **Config Management** | Three-tier config (device/agent/app) with versioning & rollback | 🔄 Store-backed model implemented; rollback/default merge gaps remain |
+| **OTA Design** | Complete Upgrade Engine design + app-level prototype | 🔄 State machine and app prototype implemented; package extraction/anti-rollback gaps remain |
 | **Terminology Migration** | Unified `device` naming across codebase | ✅ Complete |
-| **SDK Delivery** | Rust SDK + sample app demonstrating platform capabilities | 🔄 Partial |
+| **SDK Delivery** | Rust SDK + sample app demonstrating platform capabilities | 🔄 Basic Rust SDK and sample app delivered |
+
+### Current Validation Snapshot
+
+| Area | Status |
+|------|--------|
+| Unit tests | ✅ `cargo test` status in the action plan: 131 passed / 0 failed / 4 ignored |
+| Running-agent E2E | ✅ Full agent + payload app + MQTT/backend mock path marked complete in `action_plan-v2.0-zh.md` |
+| Performance baseline | ⏳ Not measured |
+| Security matrix | 🔄 Core denial/audit paths covered; full role/RPC and persisted hash-chain matrix remains |
+| v1.0 GA | ⏳ Not reached |
 
 ---
 
