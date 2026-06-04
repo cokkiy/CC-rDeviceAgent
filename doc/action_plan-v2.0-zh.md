@@ -721,7 +721,7 @@ FR-7.6 更新查询 / 触发更新 RPC 尚未暴露到 Phase 2 AppPlatform proto
 - [~] AppPlatform RBAC 矩阵测试：已覆盖 security missing fail-closed、伪造 token、readonly 写拒绝；完整 `admin/operator/readonly` × 全 RPC 矩阵仍待补
 - [~] AppPlatform Audit Chain 测试：已覆盖成功、认证失败、RBAC 拒绝、stream close 与 HealthEvaluator restart 审计；完整 handler 失败与落盘哈希链校验矩阵仍待补
 - [ ] 性能基线（待真实部署环境测量）
-- [ ] 完整 E2E 集成测试（运行中的 agent + payload app + MQTT/backend mock）
+- [x] 完整 E2E 集成测试（运行中的 agent + payload app + MQTT/backend mock；`scripts/test-phase2-e2e.sh`）
 - [x] **交付物**：代码 + 单元测试套件 + 示例应用
 
 ### 5.3 关键里程碑
@@ -734,7 +734,7 @@ FR-7.6 更新查询 / 触发更新 RPC 尚未暴露到 Phase 2 AppPlatform proto
 | W5 末 | Config Manager / Config Watcher 完成                      | 🔄 部分完成 |
 | W6 末 | App Health 最小闭环完成，OTA 设计评审通过                 | 🔄 部分完成 |
 | W7 末 | OTA 应用级原型 + Rust SDK 示例完成                        | 🔄 基本完成 |
-| W8 末 | **v1.0 发布**：应用基座 GA + OTA 设计就绪 + Device 命名统一 | ⏳ 未达 GA（待 E2E + 性能基线 + PAL 生命周期/动态策略收口） |
+| W8 末 | **v1.0 发布**：应用基座 GA + OTA 设计就绪 + Device 命名统一 | ⏳ 未达 GA（E2E 已补；待性能基线 + PAL 生命周期/动态策略收口） |
 
 ### 5.4 验收标准
 
@@ -760,9 +760,9 @@ FR-7.6 更新查询 / 触发更新 RPC 尚未暴露到 Phase 2 AppPlatform proto
 | 类型     | 覆盖范围                                                                          | 状态 |
 | -------- | --------------------------------------------------------------------------------- | ---- |
 | 单元测试 | Session 生命周期、App Registry、Lifecycle 状态机、PAL 启停/资源限制、topic 映射、config watch、health evaluator、upgrade state machine | ✅ 131 通过 |
-| 集成测试 | 注册→心跳→健康上报→数据上报→注销链路（示例应用）                                 | 🔄 编译通过，完整运行态 E2E 待补 |
-| 安全测试 | 伪造 token 拒绝、会话过期检测、Readonly RBAC 拒绝、AppPlatform Audit 成功/拒绝/stream close、HealthEvaluator restart 审计、签名/hash 错误升级包基础覆盖；完整矩阵与 running-agent E2E 待补 | 🔄 单元覆盖 |
-| E2E 测试 | 完整 Agent 进程 + payload app 集成                                                | ⏳ 待补 |
+| 集成测试 | 注册→心跳→健康上报→数据上报→注销链路（示例应用）                                 | ✅ `scripts/test-phase2-e2e.sh` 覆盖运行态 agent + payload app |
+| 安全测试 | 伪造 token 拒绝、会话过期检测、Readonly RBAC 拒绝、AppPlatform Audit 成功/拒绝/stream close、HealthEvaluator restart 审计、签名/hash 错误升级包基础覆盖；完整安全矩阵待补 | 🔄 单元覆盖 + running-agent E2E 覆盖主链路 |
+| E2E 测试 | 完整 Agent 进程 + payload app + MQTT mock 集成                                    | ✅ 已补，默认 ignored，需显式运行 `scripts/test-phase2-e2e.sh` |
 | 性能基线 | IPC 吞吐、内存占用                                                                | ⏳ 待补 |
 
 ### 5.6 范围边界与默认假设
