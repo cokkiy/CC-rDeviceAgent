@@ -721,7 +721,7 @@ FR-7.6 更新查询 / 触发更新 RPC 尚未暴露到 Phase 2 AppPlatform proto
 - [~] AppPlatform RBAC 矩阵测试：已覆盖 security missing fail-closed、伪造 token、readonly 写拒绝；完整 `admin/operator/readonly` × 全 RPC 矩阵仍待补
 - [~] AppPlatform Audit Chain 测试：已覆盖成功、认证失败、RBAC 拒绝、stream close 与 HealthEvaluator restart 审计；完整 handler 失败与落盘哈希链校验矩阵仍待补
 - [ ] 性能基线（待真实部署环境测量）
-- [x] 完整 E2E 集成测试（运行中的 agent + payload app + MQTT/backend mock）
+- [x] 完整 E2E 集成测试（真实 `cc-rdeviceagent` 进程 + `payload-hello` 进程 + 本地 MQTT mock）
 - [x] **交付物**：代码 + 单元测试套件 + 示例应用
 
 ### 5.3 关键里程碑
@@ -762,7 +762,7 @@ FR-7.6 更新查询 / 触发更新 RPC 尚未暴露到 Phase 2 AppPlatform proto
 | 单元测试 | Session 生命周期、App Registry、Lifecycle 状态机、PAL 启停/资源限制、topic 映射、config watch、health evaluator、upgrade state machine | ✅ 131 通过 |
 | 集成测试 | 注册→心跳→健康上报→数据上报→注销链路（示例应用）                                 | ✅ 覆盖运行态 agent + payload app |
 | 安全测试 | 伪造 token 拒绝、会话过期检测、Readonly RBAC 拒绝、AppPlatform Audit 成功/拒绝/stream close、HealthEvaluator restart 审计、签名/hash 错误升级包基础覆盖；完整安全矩阵待补 | 🔄 单元覆盖 + running-agent E2E 覆盖主链路 |
-| E2E 测试 | 完整 Agent 进程 + payload app + MQTT mock 集成                                    | ✅ 已补 |
+| E2E 测试 | 完整 Agent 进程 + payload app + MQTT mock 集成                                    | ✅ 已补（`tests/e2e_running_agent.rs` 覆盖真实进程链路） |
 | 性能基线 | IPC 吞吐、内存占用                                                                | ⏳ 待补 |
 
 ### 5.6 范围边界与默认假设
@@ -771,7 +771,7 @@ FR-7.6 更新查询 / 触发更新 RPC 尚未暴露到 Phase 2 AppPlatform proto
 - Phase 2 当前交付二进制应用原型；完整包解压、OCI、WASM、灰度发布、多租户推迟。
 - Rust SDK 基本交付；Python SDK 推迟到 Phase 3。
 - 系统级 OTA（A/B 槽位）、Agent 自升级、真机断电测试属于 Phase 3。
-- 南向 IPC 不做 TLS，安全边界依赖 UDS 文件权限、Session Token（哈希存储）、Security Center RBAC 与 Audit Chain；Phase 2 GA 前仍需补齐平台 IPC ACL 测试、动态策略加载和 running-agent E2E 验证。
+- 南向 IPC 不做 TLS，安全边界依赖 UDS 文件权限、Session Token（哈希存储）、Security Center RBAC 与 Audit Chain；Phase 2 GA 前仍需补齐平台 IPC ACL 测试和动态策略加载。
 
 ---
 
