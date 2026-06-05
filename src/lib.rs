@@ -29,5 +29,5 @@ pub mod tags_store;
 pub mod telemetry;
 pub mod upgrade_engine;
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-support"))]
 pub mod test_support;

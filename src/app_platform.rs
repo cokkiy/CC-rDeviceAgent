@@ -223,6 +223,7 @@ impl AppPlatformState {
     }
 
     /// Returns a reference to the shared StateStore for audit/debug queries.
+    #[cfg(feature = "test-support")]
     pub fn store(&self) -> &Arc<Mutex<StateStore>> {
         &self.store
     }

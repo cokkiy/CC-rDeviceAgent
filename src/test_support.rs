@@ -5,7 +5,8 @@
 //! - `SpawnedAgent` — a running, AppPlatform-only agent listening on a temp UDS socket
 //! - `spawn_app_platform_server` — factory that creates and starts a full AppPlatform server
 //!
-//! Only compiled under `#[cfg(test)]` — invisible to production binaries.
+//! Only compiled when the `test-support` Cargo feature is enabled — invisible to
+//! production binaries.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -91,20 +92,37 @@ pub struct SpawnedAgent {
     pub publisher: RecordingPublisher,
     /// Shared state store for post-mortem audit queries.
     pub store: Arc<Mutex<StateStore>>,
-    /// Server task handle.
-    #[allow(dead_code)]
-    server_handle: tokio::task::JoinHandle<()>,
+    /// Server task handle; held in an `Option` so it can be taken by either
+    /// `shutdown()` or `drop()` without conflict.
+    server_handle: Option<tokio::task::JoinHandle<()>>,
     /// Send `true` to signal graceful server shutdown.
     shutdown_tx: tokio::sync::watch::Sender<bool>,
+    /// Temp directory holding the UDS socket; auto-removed when dropped.
+    _temp_dir: tempfile::TempDir,
+}
+
+impl Drop for SpawnedAgent {
+    fn drop(&mut self) {
+        // Signal the server to stop; ignore errors (channel may already be closed).
+        let _ = self.shutdown_tx.send(true);
+        // Abort the server task so the socket is released promptly.
+        if let Some(handle) = self.server_handle.take() {
+            handle.abort();
+        }
+        // _temp_dir cleanup removes the socket file and directory automatically.
+    }
 }
 
 impl SpawnedAgent {
-    /// Gracefully stop the agent server, await completion, and remove the
-    /// socket file.
-    pub async fn shutdown(self) {
+    /// Gracefully stop the agent server and await completion.
+    ///
+    /// The socket file and temp directory are removed when `SpawnedAgent` is
+    /// dropped (this method consumes `self`, so drop happens immediately after).
+    pub async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
-        let _ = self.server_handle.await;
-        let _ = tokio::fs::remove_file(&self.socket_path).await;
+        if let Some(handle) = self.server_handle.take() {
+            let _ = handle.await;
+        }
     }
 }
 
@@ -122,9 +140,8 @@ impl SpawnedAgent {
 /// Returns a `SpawnedAgent` with the socket path, recording publisher, store
 /// handle, and shutdown control.
 pub async fn spawn_app_platform_server() -> Result<SpawnedAgent> {
-    let temp_dir = std::env::temp_dir().join(format!("cc-e2e-{}", std::process::id()));
-    std::fs::create_dir_all(&temp_dir).context("create temp dir for UDS socket")?;
-    let socket_path = temp_dir.join("app.sock");
+    let temp_dir = tempfile::TempDir::new().context("create temp dir for UDS socket")?;
+    let socket_path = temp_dir.path().join("app.sock");
 
     let device_id = "test-device-e2e";
 
@@ -185,9 +202,7 @@ pub async fn spawn_app_platform_server() -> Result<SpawnedAgent> {
     let service = AppPlatformService::new(state);
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
-    // keep temp_dir alive by moving it into the server task
     let server_handle = tokio::spawn(async move {
-        let _temp_dir = temp_dir;
         if let Err(e) = Server::builder()
             .add_service(service.into_server())
             .serve_with_incoming_shutdown(uds_stream, async move {
@@ -206,7 +221,8 @@ pub async fn spawn_app_platform_server() -> Result<SpawnedAgent> {
         socket_path,
         publisher,
         store: store_arc,
-        server_handle,
+        server_handle: Some(server_handle),
         shutdown_tx,
+        _temp_dir: temp_dir,
     })
 }

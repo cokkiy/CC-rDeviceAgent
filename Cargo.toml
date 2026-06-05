@@ -20,7 +20,6 @@ members = [
     "crates/pal-mock",
     "crates/pal-windows",
     "crates/pal-macos",
-    "examples/payload-hello",
 ]
 resolver = "3"
 
@@ -60,6 +59,7 @@ path = "examples/payload-hello/src/main.rs"
 
 [features]
 default = []
+test-support = ["dep:tempfile"]
 packet-capture = ["dep:pnet_datalink"]
 
 [build-dependencies]
@@ -105,6 +105,7 @@ ring = "0.17.14"
 base16 = "0.2"
 base64 = "0.22"
 async-trait = "0.1"
+tempfile = { version = "3", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

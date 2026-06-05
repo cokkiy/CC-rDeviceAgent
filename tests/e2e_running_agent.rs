@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(all(unix, feature = "test-support"))]
 
 //! End-to-end coverage for Phase 2 AppPlatform paths.
 //!

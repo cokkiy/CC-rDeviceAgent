@@ -1,9 +1,9 @@
 # Phase 2: Application Platform Implementation Status
 
-**Version**: 1.1
-**Last Updated**: 2026-06-04
-**Phase Duration**: 8 weeks
-**Target Release**: v1.0
+**Version**: 1.1  
+**Last Updated**: 2026-06-04  
+**Phase Duration**: 8 weeks  
+**Target Release**: v1.0  
 **Current Status**: 🔄 Prototype implemented; GA closeout remains
 
 ---
@@ -52,6 +52,8 @@ IPC ACL, package install, and broader security/audit matrix closeout.
 ---
 
 ## Work Package Status
+
+> **Note:** The task-level statuses below reflect the original planning baseline and are not kept current. Refer to the "Phase 2 Objectives" table and "Current Validation Snapshot" above for up-to-date progress signals.
 
 ### W2.0: Device → Device Terminology Migration (5 days) 【NEW】
 
