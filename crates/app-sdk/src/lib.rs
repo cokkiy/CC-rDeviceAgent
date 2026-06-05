@@ -48,8 +48,9 @@ use tonic::transport::Channel;
 use tracing::info;
 
 use proto::{
-    HealthReport, HeartbeatRequest, PublishDataRequest, RegisterAppRequest, SubscribeDataRequest,
-    UnregisterAppRequest, WatchConfigRequest, app_platform_client::AppPlatformClient,
+    GetConfigRequest, HealthReport, HeartbeatRequest, PublishDataRequest, RegisterAppRequest,
+    SubscribeDataRequest, UnregisterAppRequest, WatchConfigRequest,
+    app_platform_client::AppPlatformClient,
 };
 
 pub use proto::{ConfigUpdate, DataMessage, HealthStatus};
@@ -261,6 +262,21 @@ impl AppClient {
         });
 
         Ok(rx)
+    }
+
+    /// Read a configuration snapshot for the app.
+    pub async fn get_config(&mut self, keys: Vec<String>) -> Result<HashMap<String, String>> {
+        let resp = self
+            .inner
+            .get_config(GetConfigRequest {
+                app_id: self.session.app_id.clone(),
+                session_token: self.session.session_token.clone(),
+                keys,
+            })
+            .await
+            .context("get_config")?
+            .into_inner();
+        Ok(resp.config)
     }
 
     /// Unregister from the agent (graceful shutdown).
