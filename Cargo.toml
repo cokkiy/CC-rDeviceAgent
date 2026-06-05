@@ -54,6 +54,10 @@ windows-service = "0.8"
 [lib]
 name = "cc_rdeviceagent"
 
+[[bin]]
+name = "payload-hello"
+path = "examples/payload-hello/src/main.rs"
+
 [features]
 default = []
 packet-capture = ["dep:pnet_datalink"]
@@ -94,6 +98,7 @@ regex = "1.11"
 agent-core = { path = "crates/agent-core" }
 agent-store = { path = "crates/agent-store" }
 agent-telemetry = { path = "crates/agent-telemetry" }
+app-sdk = { path = "crates/app-sdk", package = "cc-rdeviceagent-app-sdk" }
 pal-core = { path = "crates/pal-core" }
 pal-fallback = { path = "crates/pal-fallback" }
 ring = "0.17.14"
@@ -113,3 +118,4 @@ pal-windows = { path = "crates/pal-windows" }
 
 [dev-dependencies]
 pal-mock = { path = "crates/pal-mock" }
+tempfile = "3"

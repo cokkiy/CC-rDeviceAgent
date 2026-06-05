@@ -28,3 +28,6 @@ pub mod tags;
 pub mod tags_store;
 pub mod telemetry;
 pub mod upgrade_engine;
+
+#[cfg(unix)]
+pub mod test_support;

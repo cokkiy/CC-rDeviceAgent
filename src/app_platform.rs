@@ -222,6 +222,11 @@ impl AppPlatformState {
         self
     }
 
+    /// Returns a reference to the shared StateStore for audit/debug queries.
+    pub fn store(&self) -> &Arc<Mutex<StateStore>> {
+        &self.store
+    }
+
     #[cfg(test)]
     fn with_default_security_for_tests(self) -> Self {
         use agent_core::security::{RbacPolicy, ReplayGuard};

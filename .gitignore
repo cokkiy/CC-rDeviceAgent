@@ -231,6 +231,8 @@ logs/iot-sim/
 /ipch
 /mkspecs
 /tests
+!/tests/
+!/tests/*.rs
 **/GeneratedFiles
 **/generated/*.cs
 **/generated/*.cpp
