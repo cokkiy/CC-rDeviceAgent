@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 //! Public test support utilities for integration tests.
 //!
 //! Provides:
