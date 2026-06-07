@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(feature = "test-support")]
 
 //! Public test support utilities for integration tests.
 //!
