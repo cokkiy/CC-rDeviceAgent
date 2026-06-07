@@ -87,6 +87,7 @@ impl AuditSink for StoreAuditSink {
 ///
 /// Holds a handle to a tonic server on a UDS socket in a temp directory.
 /// Signals shutdown on drop or via `shutdown()`.
+pub struct SpawnedAgent {
     /// UDS socket file path.
     pub socket_path: PathBuf,
     /// Recorded publisher for post-mortem verification.
@@ -124,11 +125,6 @@ impl SpawnedAgent {
         if let Some(handle) = self.server_handle.take() {
             let _ = handle.await;
         }
-    }
-}
-impl Drop for SpawnedAgent {
-    fn drop(&mut self) {
-        let _ = self.shutdown_tx.send(true);
     }
 }
 
