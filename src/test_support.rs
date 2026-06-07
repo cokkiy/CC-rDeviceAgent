@@ -86,8 +86,7 @@ impl AuditSink for StoreAuditSink {
 /// A running, AppPlatform-only agent server.
 ///
 /// Holds a handle to a tonic server on a UDS socket in a temp directory.
-/// Gracefully stops on drop or via `shutdown()`.
-pub struct SpawnedAgent {
+/// Signals shutdown on drop or via `shutdown()`.
     /// UDS socket file path.
     pub socket_path: PathBuf,
     /// Recorded publisher for post-mortem verification.
