@@ -126,6 +126,11 @@ impl SpawnedAgent {
         }
     }
 }
+impl Drop for SpawnedAgent {
+    fn drop(&mut self) {
+        let _ = self.shutdown_tx.send(true);
+    }
+}
 
 // ── factory ─────────────────────────────────────────────────────────────────
 
