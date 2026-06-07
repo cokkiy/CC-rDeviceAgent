@@ -10,15 +10,17 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     #[cfg(unix)]
-    let socket = "/var/run/cc-rdeviceagent/app.sock";
+    let socket = std::env::var("CC_APP_SOCKET_PATH")
+        .unwrap_or_else(|_| "/var/run/cc-rdeviceagent/app.sock".to_string());
     #[cfg(not(unix))]
-    let socket = "http://127.0.0.1:50061"; // placeholder for future TCP fallback
+    let socket =
+        std::env::var("CC_APP_TCP_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50061".to_string()); // placeholder for future TCP fallback
 
     info!("connecting example payload app");
 
     #[cfg(unix)]
     let mut client = AppClient::connect_uds(
-        socket,
+        &socket,
         "payload-hello",
         "0.1.0",
         vec!["metrics".into(), "health".into()],
@@ -27,7 +29,7 @@ async fn main() -> Result<()> {
 
     #[cfg(not(unix))]
     let mut client = AppClient::connect_tcp(
-        socket,
+        &socket,
         "payload-hello",
         "0.1.0",
         vec!["metrics".into(), "health".into()],

@@ -28,3 +28,6 @@ pub mod tags;
 pub mod tags_store;
 pub mod telemetry;
 pub mod upgrade_engine;
+
+#[cfg(all(unix, feature = "test-support"))]
+pub mod test_support;

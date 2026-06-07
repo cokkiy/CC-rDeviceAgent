@@ -70,8 +70,10 @@ See [`doc/architecture-zh.md`](doc/architecture-zh.md) for detailed architecture
 
 The service has moved past the v0.4 device-control baseline and now tracks the
 Phase 2 state in [`doc/action_plan-v2.0-zh.md`](doc/action_plan-v2.0-zh.md):
-the application platform and OTA design prototype are wired, with App Lifecycle
-now routed through PAL, but the release is not yet v1.0 GA.
+the application platform and OTA design prototype are wired, App Lifecycle is
+routed through PAL, and the running-agent E2E path is now marked complete. The
+release is not yet v1.0 GA because performance and policy/lifecycle hardening
+still need closeout.
 
 The northbound service exposes these protobuf services:
 
@@ -157,8 +159,8 @@ that includes all of the sections above and uses the service state interval.
 
 | Gap                                                             | Severity | Target closeout |
 | --------------------------------------------------------------- | -------- | --------------- |
-| Complete running-agent E2E test with payload app and MQTT mock   | 🔴 High   | Phase 2         |
 | Performance baseline is not measured                            | 🔴 High   | Phase 2         |
+| PAL lifecycle and dynamic policy loading closeout remain incomplete | 🔴 High | Phase 2         |
 | AppPlatform dynamic policy loading and platform IPC ACL coverage remain partial | 🟡 Medium | Phase 2         |
 | Package unpacking, manifest parsing, and install config missing  | 🟡 Medium | Phase 2         |
 | Production resource isolation / quota policy incomplete          | 🟡 Medium | Phase 2         |
@@ -176,7 +178,7 @@ Phase -1 (v0.4)       Architecture gap analysis & fixes   Complete
 Phase 0  (v0.5)       Foundation + PAL contracts          Complete / partial platform adapters
 Phase 1  (v0.8)       Security hardening                  Substantially implemented / beta gaps remain
 Phase 2  (1.0-beta)   Application platform + OTA design   Current beta track
-Phase 2  (v1.0 GA)    App platform GA closeout            E2E, performance, PAL lifecycle, policy loading
+Phase 2  (v1.0 GA)    App platform GA closeout            Performance, PAL lifecycle, policy loading
 Phase 3  (v1.5)  Full OTA upgrade                    10 weeks
 Phase 4  (v2.0)  Platformization                     10 weeks
 Phase 5  (v2.1)  Production readiness                 6 weeks
@@ -190,7 +192,7 @@ Phase 5  (v2.1)  Production readiness                 6 weeks
 | 0     | v0.5       | Foundation + PAL          | Complete core: PAL traits, State Store, CapabilityProfile      |
 | 1     | v0.8       | Security                  | Beta: mTLS, RBAC, Audit Chain, command policy; sandbox gaps    |
 | 2     | 1.0-beta   | Application platform      | Current: IPC, App Registry, Config Manager, OTA app prototype  |
-| 2     | v1.0 GA    | Application platform GA   | Pending: E2E, performance, PAL lifecycle, policy loading       |
+| 2     | v1.0 GA    | Application platform GA   | Pending: performance, PAL lifecycle, policy loading            |
 | 3     | v1.5       | OTA upgrade               | Planned: A/B slot, Agent self-update, fault injection tests    |
 | 4     | v2.0       | Platformization           | Planned: multi-tenant, canary release, extension points        |
 | 5     | v2.1       | Production readiness      | Planned: SLA validation, security audit, documentation         |
@@ -416,6 +418,11 @@ Useful commands:
 ```bash
 ./scripts/test-smoke.sh
 ```
+
+Phase 2 running-agent E2E status is tracked in
+[`doc/action_plan-v2.0-zh.md`](doc/action_plan-v2.0-zh.md). That plan now marks
+the full agent + payload app + MQTT/backend mock path complete; the performance
+baseline remains the main open validation item before v1.0 GA.
 
 ---
 

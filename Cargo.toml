@@ -20,7 +20,6 @@ members = [
     "crates/pal-mock",
     "crates/pal-windows",
     "crates/pal-macos",
-    "examples/payload-hello",
 ]
 resolver = "3"
 
@@ -54,8 +53,13 @@ windows-service = "0.8"
 [lib]
 name = "cc_rdeviceagent"
 
+[[bin]]
+name = "payload-hello"
+path = "examples/payload-hello/src/main.rs"
+
 [features]
 default = []
+test-support = ["dep:tempfile"]
 packet-capture = ["dep:pnet_datalink"]
 
 [build-dependencies]
@@ -94,12 +98,14 @@ regex = "1.11"
 agent-core = { path = "crates/agent-core" }
 agent-store = { path = "crates/agent-store" }
 agent-telemetry = { path = "crates/agent-telemetry" }
+app-sdk = { path = "crates/app-sdk", package = "cc-rdeviceagent-app-sdk" }
 pal-core = { path = "crates/pal-core" }
 pal-fallback = { path = "crates/pal-fallback" }
 ring = "0.17.14"
 base16 = "0.2"
 base64 = "0.22"
 async-trait = "0.1"
+tempfile = { version = "3", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -113,3 +119,4 @@ pal-windows = { path = "crates/pal-windows" }
 
 [dev-dependencies]
 pal-mock = { path = "crates/pal-mock" }
+tempfile = "3"

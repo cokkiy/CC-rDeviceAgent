@@ -199,11 +199,7 @@ pub async fn run(
     }
 
     // Open StateStore for audit persistence next to the service binary.
-    let store_path = state
-        .service_path()
-        .parent()
-        .map(|p| p.join("state.db"))
-        .unwrap_or_else(|| std::path::PathBuf::from("state.db"));
+    let store_path = state_store_path(&state);
     let state_store = Mutex::new(
         agent_store::StateStore::open(&store_path)
             .map_err(|e| anyhow::anyhow!("open state store at {}: {e}", store_path.display()))?,
@@ -369,6 +365,19 @@ pub async fn run(
         })
         .await
         .context("run gRPC server")
+}
+
+fn state_store_path(state: &AppState) -> PathBuf {
+    std::env::var_os("CC_AGENT_STATE_DB")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            state
+                .service_path()
+                .parent()
+                .map(|p| p.join("state.db"))
+                .unwrap_or_else(|| std::path::PathBuf::from("state.db"))
+        })
 }
 
 fn build_grpc_tls_config(tls: &crate::config::TlsConfig) -> Result<ServerTlsConfig> {
